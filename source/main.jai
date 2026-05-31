@@ -12,7 +12,31 @@ main :: () {
     }
 
     if is_set.repl {
-        print("TODO");
+        while repl := 1 {
+            print("magic> ");
+            input := trim_right(console_input());
+            if input == "quit" || input == "q" {
+                return;
+            }
+
+            context.source = input;
+            context.file_name = "REPL";
+
+            t: Tokenizer;
+            init_tokenizer(*t, input);
+            curr := get_token(*t);
+
+            while curr.kind != .EOF {
+                if curr.kind == .INVALID {
+                    flush_messages();
+                    continue repl;
+                }
+
+                print("%\n", pprint_token(curr));
+                free_token(curr);
+                curr = get_token(*t);
+            }
+        }
     } else if is_set.file {
         print("TODO");
     } else {
@@ -37,6 +61,9 @@ meme1 :: #string MEME
 ⠀⠀⠀⠀⠁⠇⠡⠩⡫⢿⣝⡻⡮⣒⢽⠋⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
 ——————————————————————————————
 MEME
+
+#load "tokenizer.jai";
+#load "messager.jai";
 
 #if OS == .WINDOWS {
     console_input :: () -> string {
@@ -70,3 +97,5 @@ MEME
 
 #import "Basic";
 #import "Command_Line";
+#import "Unicode";
+#import "String";
