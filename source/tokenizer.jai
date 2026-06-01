@@ -72,6 +72,7 @@ Token_Kind :: enum {
 
     IDENTIFIER;
 
+    NONE;
     TRUE;
     FALSE;
     DECL;
@@ -490,6 +491,7 @@ get_token :: (using t: *Tokenizer) -> Token {
         }
 
         if slice(text, token.offset, cursor.offset - token.offset) == {
+        case "none";   token.kind = .NONE;
         case "true";   token.kind = .TRUE;
         case "false";  token.kind = .FALSE;
 

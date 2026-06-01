@@ -22,23 +22,43 @@ main :: () {
             context.source = input;
             context.file_name = "REPL";
 
-            t: Tokenizer;
-            init_tokenizer(*t, input);
-            curr := get_token(*t);
-
-            while curr.kind != .EOF {
-                if curr.kind == .INVALID {
+            p: Parser;
+            init_parser(*p);
+            while p.curr.kind != .EOF {
+                node := parse_node(*p);
+                if p.has_error {
                     flush_messages();
                     continue repl;
                 }
 
-                print("%\n", pprint_token(curr));
-                free_token(curr);
-                curr = get_token(*t);
+                print("%\n", pprint_node(node));
+                reset_ast_rendering();
             }
         }
     } else if is_set.file {
-        print("TODO");
+        source, ok := read_entire_file(args.file, log_errors = false);
+        if !ok {
+            print("Merlin cannot find `%`!!\n", args.file);
+            return;
+        }
+
+        context.source = source;
+        context.file_name = args.file;
+
+        t: Tokenizer;
+        init_tokenizer(*t, source);
+        curr := get_token(*t);
+
+        while curr.kind != .EOF {
+            if curr.kind == .INVALID {
+                flush_messages();
+                return;
+            }
+
+            print("%\n", pprint_token(curr));
+            free_token(curr);
+            curr = get_token(*t);
+        }
     } else {
         print(meme1);
     }
@@ -64,6 +84,8 @@ MEME
 
 #load "tokenizer.jai";
 #load "messager.jai";
+#load "parser.jai";
+#load "code_printer.jai";
 
 #if OS == .WINDOWS {
     console_input :: () -> string {
@@ -99,3 +121,5 @@ MEME
 #import "Command_Line";
 #import "Unicode";
 #import "String";
+#import "File";
+#import "Flat_Pool";
