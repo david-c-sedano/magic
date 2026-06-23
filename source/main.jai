@@ -1,71 +1,45 @@
 
 Arguments :: struct {
-    repl: bool; @"?go into repl";
-    file: string; @"?read from file";
+    file: string; @"?the file with which the text that constitutes your program which you desire to have be compiled";
 }
 
 main :: () {
-    #if OS == .WINDOWS SetConsoleOutputCP(CP_UTF8);
+    #if OS == .WINDOWS {
+        Windows :: #import "Windows";
+        Windows.SetConsoleOutputCP(CP_UTF8);
+    }
     ok, args, is_set := parse_arguments(Arguments);
     if !ok {
         return;
     }
 
-    if is_set.repl {
-        while repl := 1 {
-            print("magic> ");
-            input := trim_right(console_input());
-            if input == "quit" || input == "q" {
-                return;
-            }
-
-            context.source = input;
-            context.file_name = "REPL";
-
-            p: Parser;
-            init_parser(*p);
-            while p.curr.kind != .EOF {
-                node := parse_node(*p);
-                if p.has_error {
-                    flush_messages();
-                    continue repl;
-                }
-
-                print("%\n", pprint_node(node));
-                reset_ast_rendering();
-            }
-        }
-    } else if is_set.file {
-        source, ok := read_entire_file(args.file, log_errors = false);
+    if is_set.file {
+        root: Compiler_Workspace;
+        root_parser: Parser;
+        root.current_file_being_worked_on = args.file;
+        ok = init_parser_from_current_file(*root, *root_parser);
         if !ok {
-            print("Merlin cannot find `%`!!\n", args.file);
             return;
         }
 
-        context.source = source;
-        context.file_name = args.file;
-
-        t: Tokenizer;
-        init_tokenizer(*t, source);
-        curr := get_token(*t);
-
-        while curr.kind != .EOF {
-            if curr.kind == .INVALID {
-                flush_messages();
+        while root_parser.curr.kind != .EOF {
+            node := parse_node(*root_parser);
+            if root_parser.has_error {
+                flush_messages(*root);
                 return;
             }
 
-            print("%\n", pprint_token(curr));
-            free_token(curr);
-            curr = get_token(*t);
+            print("%\n", pprint_node(node));
+            reset_ast_rendering();
         }
+    
     } else {
         print(meme1);
     }
 }
 
 meme1 :: #string MEME
-———————————No args?———————————
+———————————No file?———————————
 ⠀⣞⢽⢪⢣⢣⢣⢫⡺⡵⣝⡮⣗⢷⢽⢽⢽⣮⡷⡽⣜⣜⢮⢺⣜⢷⢽⢝⡽⣝
 ⠸⡸⠜⠕⠕⠁⢁⢇⢏⢽⢺⣪⡳⡝⣎⣏⢯⢞⡿⣟⣷⣳⢯⡷⣽⢽⢯⣳⣫⠇
 ⠀⠀⢀⢀⢄⢬⢪⡪⡎⣆⡈⠚⠜⠕⠇⠗⠝⢕⢯⢫⣞⣯⣿⣻⡽⣏⢗⣗⠏⠀
@@ -82,8 +56,8 @@ meme1 :: #string MEME
 ——————————————————————————————
 MEME
 
+#load "workspace.jai";
 #load "tokenizer.jai";
-#load "messager.jai";
 #load "parser.jai";
 #load "code_printer.jai";
 
@@ -123,3 +97,4 @@ MEME
 #import "String";
 #import "File";
 #import "Flat_Pool";
+#import "Hash_Table";

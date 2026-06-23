@@ -10,7 +10,6 @@ do_build :: () {
     opts.output_executable_name = "magic";
     args := opts.compile_time_command_line;
 
-
     for args {
         if it == {
         case "just_run_it";
@@ -35,7 +34,7 @@ message_loop :: (w: Workspace) #expand {
             complete := cast(*Message_Complete) msg;
             if just_run_it && complete.error_code == 0 {
                 print("[JUST RUNNING IT]:\n");
-                run_command(opts.output_executable_name, "-repl");
+                run_command(opts.output_executable_name, "-file", FILE_FOR_EZ_TESTING);
             }
             break;
         }
@@ -43,6 +42,8 @@ message_loop :: (w: Workspace) #expand {
 }
 
 just_run_it: bool;
+FILE_FOR_EZ_TESTING :: "./test.magic";
+
 #import "Basic";
 #import "Compiler";
 #import "Process";

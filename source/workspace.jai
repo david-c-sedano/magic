@@ -1,15 +1,4 @@
 
-/*  so, the messager is basically a logger
-    but its fancier because it doesn't really do "logging"
-    it keeps track of indices within the source code input and associated messages
-    when it does an error message, it will put together a view of the text
-    then it prints it with highlighting all nice
-
-    because it's similar to a logger, it pairs well with Jai's context system
-    whenever you are parsing/evaluating a different source string from a file
-    just override the context fields and everything magically works 
-*/
-
 Source_Loc :: struct {
     offset: int;
     line: int;
@@ -25,29 +14,55 @@ Message :: struct {
     end: Source_Loc;
 }
 
-#add_context messages: [..]Message;
-#add_context source: string;
-#add_context file_name: string;
+Compiler_Workspace :: struct {
+    // key=path, value=actual source code
+    sources: Table(string, string); 
+    current_file_being_worked_on: string;
+    messages: [..]Message;
 
-push_message :: (msg_text: string, fmt: ..Any) {
-    msg: Message;
-    msg.text = sprint(msg_text, ..fmt);
-    array_add(*context.messages, msg);
+    allocator: Allocator;
 }
 
-push_location :: (start: Source_Loc, end: Source_Loc, msg_text: string, fmt: ..Any) {
+get_current_file_source :: (using w: *Compiler_Workspace) -> string, bool {
+    assert(current_file_being_worked_on != "");
+    source, ok := table_find(*sources, current_file_being_worked_on);
+    if !ok {
+        source, ok = read_entire_file(current_file_being_worked_on, log_errors = false);
+        if !ok {
+            print("The wizards of great magic cannot find `%`!!\n", 
+                current_file_being_worked_on
+            );
+            return "", false;
+        }
+        if source == "" {
+            print("File is empty??\n");
+            print(meme1);
+            return "", false;
+        }
+        table_add(*sources, current_file_being_worked_on, source);
+    }
+    return source, true;
+}
+
+push_message :: (using w: *Compiler_Workspace, msg_text: string, fmt: ..Any) {
+    msg: Message;
+    msg.text = sprint(msg_text, ..fmt);
+    array_add(*messages, msg);
+}
+
+push_location :: (using w: *Compiler_Workspace, start: Source_Loc, end: Source_Loc, msg_text: string, fmt: ..Any) {
     msg: Message;
     msg.is_error = true;
     msg.text = sprint(msg_text, ..fmt);
-    msg.source = context.source;
-    msg.file_name = context.file_name;
+    msg.source = get_current_file_source(w);
+    msg.file_name = current_file_being_worked_on;
     msg.start = start;
     msg.end = end;
-    array_add(*context.messages, msg);
+    array_add(*messages, msg);
 }
 
-flush_messages :: () {
-    for msg: context.messages {
+flush_messages :: (using w: *Compiler_Workspace) {
+    for msg: messages {
         if !msg.is_error {
             print("[INFO] %\n", msg.text);
             continue;
@@ -87,7 +102,7 @@ flush_messages :: () {
             print(source_view);
         }
     }
-    array_reset(*context.messages);
+    array_reset(*messages);
 }
 
 get_line_text :: (source: string, line: int) -> string {
@@ -130,7 +145,7 @@ caret_line :: (start: Source_Loc, end: Source_Loc) -> string {
     return builder_to_string(*b);
 }
 
-suppress_messages :: () {
-    array_reset(*context.messages);
+suppress_messages :: (using w: *Compiler_Workspace) {
+    array_reset(*messages);
 }
 

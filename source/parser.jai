@@ -131,11 +131,12 @@ Map :: struct {
 } @parse_node
 
 Parser :: struct {
-    using t: Tokenizer;
+    tokenizer: Tokenizer;
     prev: Token;
     curr: Token;
     has_error: bool;
-    arena: Flat_Pool;
+
+    workspace: *Compiler_Workspace;
 }
 
 node_cast :: (
@@ -166,8 +167,8 @@ wrap_node :: (node: *Parse_Node($T)) -> *Parse_Node(void) {
     return cast(*Parse_Node(void)) node;
 }
 
-new_node :: ($T: Type, p: Parser, kind: Parse_Node_Kind = .INVALID) -> *Parse_Node(T) {
-    node := New(Parse_Node(T));
+new_node :: ($T: Type, p: *Parser, kind: Parse_Node_Kind = .INVALID) -> *Parse_Node(T) {
+    node := New(Parse_Node(T),,p.workspace.allocator);
 
     #if T.kind_range.count == 1 {
         node.kind = T.kind_range[0];
@@ -178,21 +179,24 @@ new_node :: ($T: Type, p: Parser, kind: Parse_Node_Kind = .INVALID) -> *Parse_No
         node.kind = kind;
     }
 
-    node.source = context.source;
-    node.file_name = context.file_name;
+    node.file_name = p.workspace.current_file_being_worked_on;
+    node.source = get_current_file_source(p.workspace);
     return node;
 }
 
-init_parser :: (p: *Parser) {
-    init_tokenizer(*p.t, context.source);
-    next_token(p);
+init_parser_from_current_file :: (w: *Compiler_Workspace, parser: *Parser) -> bool {
+    parser.workspace = w;
+    if !init_tokenizer_from_current_file(w, *parser.tokenizer) {
+        return false;
+    }
+    next_token(parser);
+    return true;
 }
 
-next_token :: (using p: *Parser) -> Token {
-    free_token(prev);
-    prev = curr;
-    curr = get_token(*t);
-    return prev;
+next_token :: (parser: *Parser) -> Token {
+    parser.prev = parser.curr;
+    parser.curr = get_token(*parser.tokenizer);
+    return parser.prev;
 }
 
 expect_token :: (using p: *Parser, kinds: ..Token_Kind) -> Token, bool {
@@ -214,7 +218,7 @@ parse_binding :: (using p: *Parser) -> *Parse_Node(Binding) {
     ok: bool;
     binding.name, ok = expect_token(p, .IDENTIFIER);
     if !ok {
-        push_location(binding.name.pos, binding.name.end,
+        push_location(workspace, binding.name.pos, binding.name.end,
             "expected identifier after decl keyword"
         );
         has_error = true;
@@ -223,7 +227,7 @@ parse_binding :: (using p: *Parser) -> *Parse_Node(Binding) {
     
     assign, has_assign := expect_token(p, .ASSIGN);
     if !has_assign {
-        push_location(assign.pos, assign.end,
+        push_location(workspace, assign.pos, assign.end,
             "expected assignment in declaration"
         );
         has_error = true;
@@ -389,7 +393,7 @@ parse_expr :: (using p: *Parser, min_prec := 0) -> *Parse_Node(void) {
 
             cparen, has_close_paren := expect_token(p, .CLOSE_PAREN);
             if !has_close_paren {
-                push_location(token.pos, token.end,
+                push_location(workspace, token.pos, token.end,
                     "expected closing paren in expression"
                 );
                 has_error = true;
@@ -442,7 +446,7 @@ parse_expr :: (using p: *Parser, min_prec := 0) -> *Parse_Node(void) {
             return wrap_node(map);
 
         case;
-            push_location(token.pos, token.end,
+            push_location(workspace, token.pos, token.end,
                 "Got unexpected token `%` while parsing expression", 
                 token.kind
             );
@@ -571,7 +575,7 @@ parse_subscript :: (using p: *Parser, subscriptee: *Parse_Node(void)) -> *Parse_
 
     cbracket, has_cbracket := expect_token(p, .CLOSE_BRACKET);
     if !has_cbracket {
-        push_location(cbracket.pos, cbracket.end,
+        push_location(workspace, cbracket.pos, cbracket.end,
             "Expected a closing bracket in subscript"
         );
         has_error = true;
@@ -585,7 +589,7 @@ parse_subscript :: (using p: *Parser, subscriptee: *Parse_Node(void)) -> *Parse_
 parse_block :: (using p: *Parser) -> *Parse_Node(Block) {
     in, has_in := expect_token(p, .IN);
     if !has_in {
-        push_location(in.pos, in.end,
+        push_location(workspace, in.pos, in.end,
             "Expected `in` to denote start of block"
         );
         has_error = true;
@@ -597,7 +601,7 @@ parse_block :: (using p: *Parser) -> *Parse_Node(Block) {
 
     while 1 {
         if curr.kind == .EOF {
-            push_location(in.pos, in.end,
+            push_location(workspace, in.pos, in.end,
                 "Unexpected End Of File while parsing block"
             );
             has_error = true;
@@ -659,7 +663,7 @@ parse_if_else :: (using p: *Parser) -> *Parse_Node(If_Else) {
     }
     in, has_in := expect_token(p, .IN);
     if !has_in {
-        push_location(in.pos, in.end,
+        push_location(workspace, in.pos, in.end,
             "expected `in` after condition in if statement"
         );
         has_error = true;
@@ -673,7 +677,7 @@ parse_if_else :: (using p: *Parser) -> *Parse_Node(If_Else) {
     if_body.pos = in.pos;
     while 1 {
         if curr.kind == .EOF {
-            push_location(if_token.pos, if_token.end,
+            push_location(workspace, if_token.pos, if_token.end,
                 "Unexpected End Of File while parsing body of if-statement"
             );
             has_error = true;
@@ -710,7 +714,7 @@ parse_if_else :: (using p: *Parser) -> *Parse_Node(If_Else) {
             if curr.kind == .IF is_else_if = true;
 
             if curr.kind == .EOF {
-                push_location(else_token.pos, else_token.end,
+                push_location(workspace, else_token.pos, else_token.end,
                     "Unexpected End Of File while parsing else-statement"
                 );
                 has_error = true;
@@ -768,7 +772,7 @@ parse_function :: (using p: *Parser) -> *Parse_Node(Function) {
 
     oparen, has_oparen := expect_token(p, .OPEN_PAREN);
     if !has_oparen {
-        push_location(oparen.pos, oparen.end, 
+        push_location(workspace, oparen.pos, oparen.end, 
             "expected parameters in function"
         );
         has_error = true;
@@ -853,7 +857,7 @@ parse_map :: (using p: *Parser) -> *Parse_Node(Map) {
         }
 
         if curr.kind != .COLON {
-            push_location(curr.pos, curr.end,
+            push_location(workspace, curr.pos, curr.end,
                 "expected a colon to separate keys and values in map",
             );
             has_error = true;

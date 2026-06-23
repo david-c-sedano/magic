@@ -1,8 +1,2 @@
 
-some "tokens" for 'u'
-
-''
-this is "multiline" string
-''
-
-1 + 2 * 3
+decl 1 = 1 + 2 * 3;

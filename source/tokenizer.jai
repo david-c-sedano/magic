@@ -2,14 +2,6 @@
 /*  Lexical Analysis   ❌ 
     Character Grouping ✅
     seriously, I don't understand why some language tokenizers go over 1000 lines
-
-    Anyways, let me talk a little bit about data here
-    tokens are returned by value always (live on stack)
-    and they just point to the main source code string
-    tokens do not own the `text`
-    except for string literals, which needs to be unescaped
-    so in that case there is a "text_needs_free" flag
-    `free_token` just does nothing unless the flag is true 
 */
 
 Tokenizer :: struct {
@@ -18,6 +10,8 @@ Tokenizer :: struct {
     r: u32;
     w: u32;
     line_offset: int;
+
+    workspace: *Compiler_Workspace;
 }
 
 Token :: struct {
@@ -25,8 +19,6 @@ Token :: struct {
     end: Source_Loc;
     text: string;
     kind: Token_Kind;
-
-    text_needs_free: bool;
 }
 
 Token_Kind :: enum {
@@ -88,10 +80,15 @@ Token_Kind :: enum {
     FU;
 }
 
-init_tokenizer :: (t: *Tokenizer, text: string) {
+init_tokenizer_from_current_file :: (w: *Compiler_Workspace, t: *Tokenizer) -> bool {
     t.cursor.line = 1;
-    t.text = text;
+    ok: bool;
+    t.text, ok = get_current_file_source(w);
+    if !ok {
+        return false;
+    }
     next_rune(t);
+    return true;
 }
 
 next_rune :: (using t: *Tokenizer) -> u32 {
@@ -174,14 +171,14 @@ skip_past_next_quote :: (using t: *Tokenizer) -> bool {
         }
         
         if r == #char "\n" {
-            push_location(start, cursor,
+            push_location(workspace, start, cursor,
                 "straight newline in string literal is not allowed. (watch your unclosed strings!)"
             );
             return false;
         }
 
         if r == ~(cast(u32) 0) {
-            push_location(start, cursor,
+            push_location(workspace, start, cursor,
                 "unclosed string beyond End Of File"
             );
             return false;
@@ -201,7 +198,7 @@ skip_past_end_of_multiline_string :: (using t: *Tokenizer) -> bool {
     start := cursor;
     while cursor.offset < text.count+1 {
         if r == ~(cast(u32) 0) {
-            push_location(start, cursor,
+            push_location(workspace, start, cursor,
                 "unclosed multi-line string beyond End Of File"
             );
             return false;
@@ -221,8 +218,9 @@ skip_past_end_of_multiline_string :: (using t: *Tokenizer) -> bool {
     return true;
 }
 
-unescape_string :: (s: string) -> string, bool {
+unescape_string :: (using t: *Tokenizer, s: string) -> string, bool {
     b: String_Builder;
+    b.allocator = workspace.allocator;
     if s.count < 2 {
         return "", false;
     }
@@ -368,11 +366,11 @@ get_token :: (using t: *Tokenizer) -> Token {
                 return Token.{ kind = .INVALID, pos = token.pos, end = cursor };
             }
             unescaped: string;
-            unescaped, ok = unescape_string(
+            unescaped, ok = unescape_string(t,
                 slice(text, token.offset+1, cursor.offset-token.offset-2)
             );
             if !ok {
-                push_location(token.pos, cursor,
+                push_location(workspace, token.pos, cursor,
                     "invalid string or escape sequence in string"
                 );
                 return Token.{ kind = .INVALID, pos = token.pos, end = cursor };
@@ -381,7 +379,6 @@ get_token :: (using t: *Tokenizer) -> Token {
             token.text = unescaped;
             token.end = cursor;
             token.end.column -= 1;
-            token.text_needs_free = true;
             return token;
         }
 
@@ -392,9 +389,9 @@ get_token :: (using t: *Tokenizer) -> Token {
         }
 
         unescaped: string;
-        unescaped, ok = unescape_string(slice(text, token.offset, cursor.offset - token.offset));
+        unescaped, ok = unescape_string(t, slice(text, token.offset, cursor.offset - token.offset));
         if !ok {
-            push_location(token.pos, cursor,
+            push_location(workspace, token.pos, cursor,
                 "invalid string or escape sequence in string"
             );
             return Token.{ kind = .INVALID, pos = token.pos, end = cursor };
@@ -406,7 +403,6 @@ get_token :: (using t: *Tokenizer) -> Token {
         }
         token.end = cursor;
         token.end.column -= 1;
-        token.text_needs_free = true;
         return token;
 
     case #char "+"; token.kind = .PLUS;
@@ -512,11 +508,6 @@ get_token :: (using t: *Tokenizer) -> Token {
     token.end = cursor;
     token.end.column -= 1;
     return token;
-}
-
-free_token :: (token: Token) {
-    if !token.text_needs_free return;
-    free(token.text.data);
 }
 
 pprint_token :: (token: Token) -> string {

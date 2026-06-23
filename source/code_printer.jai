@@ -1,5 +1,5 @@
 
-#add_context code_printer_arena: Flat_Pool;
+#add_context code_printer_arena: Flat_Pool; // how lazy!
 
 get_builder_for_ast_rendering :: () -> String_Builder #expand {
     b: String_Builder;
