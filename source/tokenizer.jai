@@ -81,6 +81,7 @@ Token_Kind :: enum {
 }
 
 init_tokenizer_from_current_file :: (w: *Compiler_Workspace, t: *Tokenizer) -> bool {
+    t.workspace = w;
     t.cursor.line = 1;
     ok: bool;
     t.text, ok = get_current_file_source(w);
@@ -263,7 +264,7 @@ unescape_string :: (using t: *Tokenizer, s: string) -> string, bool {
         i += w;
     }
 
-    return builder_to_string(*b), true;
+    return builder_to_string(*b, do_reset = false), true;
 }
 
 is_identifier_char :: (r: u32) -> bool {

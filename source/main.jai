@@ -6,7 +6,7 @@ Arguments :: struct {
 main :: () {
     #if OS == .WINDOWS {
         Windows :: #import "Windows";
-        Windows.SetConsoleOutputCP(CP_UTF8);
+        Windows.SetConsoleOutputCP(Windows.CP_UTF8);
     }
     ok, args, is_set := parse_arguments(Arguments);
     if !ok {
@@ -14,7 +14,13 @@ main :: () {
     }
 
     if is_set.file {
+        my_arena: Flat_Pool;
+        a: Allocator;
+        a.data = *my_arena;
+        a.proc = flat_pool_allocator_proc;
+
         root: Compiler_Workspace;
+        root.allocator = a;
         root_parser: Parser;
         root.current_file_being_worked_on = args.file;
         ok = init_parser_from_current_file(*root, *root_parser);
@@ -60,36 +66,6 @@ MEME
 #load "tokenizer.jai";
 #load "parser.jai";
 #load "code_printer.jai";
-
-#if OS == .WINDOWS {
-    console_input :: () -> string {
-        temp: [MAX_BYTES_TO_READ]u8;
-        result: string = ---;
-        bytes_read: s32;
-        
-        if !ReadConsoleA(GetStdHandle(STD_INPUT_HANDLE), temp.data, xx temp.count, *bytes_read) {
-            return "";
-        }
-
-        result.data = alloc(bytes_read);
-        result.count = bytes_read;
-        memcpy(result.data, temp.data, bytes_read);
-        return result;
-    }
-
-    ReadConsoleA :: (
-        hConsoleHandle: HANDLE, 
-        buff: *u8, 
-        chars_to_read: s32,  
-        chars_read: *s32, 
-        lpInputControl := *void 
-    ) -> bool #foreign kernel32;
-
-    kernel32 :: #library,system "kernel32";
-    #import "Windows";
-
-    MAX_BYTES_TO_READ :: 4000;
-}
 
 #import "Basic";
 #import "Command_Line";

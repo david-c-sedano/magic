@@ -1,2 +1,2 @@
 
-decl 1 = 1 + 2 * 3;
+decl one = "hi there\n!";
