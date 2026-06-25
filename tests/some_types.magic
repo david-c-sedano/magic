@@ -1,0 +1,19 @@
+
+
+decl myint = 69 @s64;
+decl myuint = in 69 end @u64;
+decl myfloat = 69.420 @float32;
+
+decl zero = @s64;
+
+decl vector2 = {
+    x = @s32;
+    y = @s32;
+};
+
+decl vector2_initialized_with_5s = {
+    x = 5 @s32;
+    y = in 5 end @s32;
+};
+
+decl wrong = @deez_nuts;

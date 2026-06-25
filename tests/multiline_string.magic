@@ -1,0 +1,5 @@
+
+
+decl mystr = ''
+    this is a multi-line string!
+'';

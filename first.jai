@@ -42,7 +42,7 @@ message_loop :: (w: Workspace) #expand {
 }
 
 just_run_it: bool;
-FILE_FOR_EZ_TESTING :: "./test.magic";
+FILE_FOR_EZ_TESTING :: "./tests/some_types.magic";
 
 #import "Basic";
 #import "Compiler";

@@ -17,15 +17,23 @@ reset_ast_rendering :: () {
     reset(*context.code_printer_arena, overwrite_memory = true);
 }
 
-pprint_binding :: (binding: *Parse_Node(Binding), prefix := "") -> string {
+pprint_binding :: (binding: *AST_Node(Binding), prefix := "") -> string {
     b := get_builder_for_ast_rendering(); 
 
     print_to_builder(*b, 
         ifx binding.forward then
-            "FORWARD %\n"
+            "FORWARD %"
         else
-            "DECL %\n",
+            "DECL %",
         binding.name.text
+    );
+
+    print_to_builder(*b, 
+        ifx binding.hint.flag != .UNKNOWN then
+            ": % %bit\n"
+        else
+            "\n",
+        binding.hint.flag, binding.hint.size
     );
 
     append(*b, join(prefix, "└───"));
@@ -33,7 +41,7 @@ pprint_binding :: (binding: *Parse_Node(Binding), prefix := "") -> string {
     return builder_to_string(*b);
 }
 
-pprint_return :: (return_stmnt: *Parse_Node(Return), prefix := "") -> string {
+pprint_return :: (return_stmnt: *AST_Node(Return), prefix := "") -> string {
     b := get_builder_for_ast_rendering(); 
 
     append(*b, "RETURN\n");
@@ -43,7 +51,7 @@ pprint_return :: (return_stmnt: *Parse_Node(Return), prefix := "") -> string {
     return builder_to_string(*b);
 }
 
-pprint_node :: (node: *Parse_Node(void), prefix := "") -> string {
+pprint_node :: (node: *AST_Node(void), prefix := "") -> string {
     /* STATEMENTS */
     binding := node_cast(node, Binding);
     if binding != null {
@@ -69,10 +77,10 @@ pprint_node :: (node: *Parse_Node(void), prefix := "") -> string {
     return pprint_expr(node, prefix);
 }
 
-pprint_expr :: (node: *Parse_Node(void), prefix := "", mark_block := true, cont := false) -> string {
+pprint_expr :: (node: *AST_Node(void), prefix := "", mark_block := true, cont := false) -> string {
 
     recurse :: (
-        node: *Parse_Node(void), 
+        node: *AST_Node(void), 
         b: *String_Builder, 
         prefix: string, 
         mark_block := false, 
@@ -147,9 +155,9 @@ pprint_expr :: (node: *Parse_Node(void), prefix := "", mark_block := true, cont 
             return;
         }
 
-        map := node_cast(node, Map);
-        if map != null {
-            append(b, pprint_map(map, prefix));
+        structure := node_cast(node, Structure);
+        if structure != null {
+            append(b, pprint_struct(structure, prefix));
             return;
         }
 
@@ -168,7 +176,7 @@ pprint_expr :: (node: *Parse_Node(void), prefix := "", mark_block := true, cont 
     return builder_to_string(*b);
 }
 
-pprint_call :: (call: *Parse_Node(Call), prefix := "") -> string {
+pprint_call :: (call: *AST_Node(Call), prefix := "") -> string {
     b := get_builder_for_ast_rendering(); 
 
     print_to_builder(*b, "CALL\n%├───", prefix);
@@ -191,7 +199,7 @@ pprint_call :: (call: *Parse_Node(Call), prefix := "") -> string {
     return builder_to_string(*b);
 }
 
-pprint_subscript :: (subscript: *Parse_Node(Subscript), prefix := "") -> string {
+pprint_subscript :: (subscript: *AST_Node(Subscript), prefix := "") -> string {
     b := get_builder_for_ast_rendering(); 
 
     print_to_builder(*b, "SUBSCRIPT\n%├───", prefix);
@@ -203,14 +211,14 @@ pprint_subscript :: (subscript: *Parse_Node(Subscript), prefix := "") -> string 
 }
 
 pprint_block :: (
-    block: *Parse_Node(Block), 
+    block: *AST_Node(Block), 
     prefix := "", 
     mark_it := false, 
     cont := false
 ) -> string {
 
     recurse :: (
-        block: *Parse_Node(Block), 
+        block: *AST_Node(Block), 
         b: *String_Builder, 
         prefix: string, 
         mark_it: bool,
@@ -255,7 +263,7 @@ pprint_block :: (
     return builder_to_string(*b);
 }
 
-pprint_if_else :: (if_else: *Parse_Node(If_Else), prefix := "") -> string {
+pprint_if_else :: (if_else: *AST_Node(If_Else), prefix := "") -> string {
     b := get_builder_for_ast_rendering(); 
     has_else := if_else.else_body != null;
 
@@ -271,7 +279,7 @@ pprint_if_else :: (if_else: *Parse_Node(If_Else), prefix := "") -> string {
     return builder_to_string(*b);
 }
 
-pprint_while :: (while_loop: *Parse_Node(While_Loop), prefix := "") -> string {
+pprint_while :: (while_loop: *AST_Node(While_Loop), prefix := "") -> string {
     b := get_builder_for_ast_rendering(); 
 
     print_to_builder(*b, "WHILE\n%├───", prefix);
@@ -281,7 +289,7 @@ pprint_while :: (while_loop: *Parse_Node(While_Loop), prefix := "") -> string {
     return builder_to_string(*b);
 }
 
-pprint_function :: (func: *Parse_Node(Function), prefix := "") -> string {
+pprint_function :: (func: *AST_Node(Function), prefix := "") -> string {
     b := get_builder_for_ast_rendering(); 
 
     append(*b, "FUNCTION\n");
@@ -298,7 +306,7 @@ pprint_function :: (func: *Parse_Node(Function), prefix := "") -> string {
     return builder_to_string(*b);
 }
 
-pprint_list :: (list: *Parse_Node(List), prefix := "") -> string {
+pprint_list :: (list: *AST_Node(List), prefix := "") -> string {
     b := get_builder_for_ast_rendering(); 
 
     append(*b, "LIST\n");
@@ -314,25 +322,30 @@ pprint_list :: (list: *Parse_Node(List), prefix := "") -> string {
     return builder_to_string(*b);
 }
 
-pprint_map :: (map: *Parse_Node(Map), prefix := "") -> string {
+pprint_struct :: (structure: *AST_Node(Structure), prefix := "") -> string {
     b := get_builder_for_ast_rendering(); 
 
-    /* this is killing me bro
-       representing maps in this manner is goofy as sheeeeeeet anyways 
-    */
-    append(*b, "MAP\n");
-    for 0 .. map.keys.count-1 {
-        is_last := it == map.keys.count - 1;
+    append(*b, "STRUCT\n");
+    for 0 .. structure.members.count-1 {
+        is_last := it == structure.members.count - 1;
         ext := ifx is_last then "    " else "│   ";
-        append(*b, join(prefix, ifx is_last then "└───KEY\n" else "├───KEY\n"));
+        append(*b, join(prefix, ifx is_last then "└───MEMBER" else "├───MEMBER"));
+
+        print_to_builder(*b, 
+            ifx structure.members[it].hint.flag != .UNKNOWN then
+                ": % %bit\n"
+            else
+                "\n",
+            structure.members[it].hint.flag, structure.members[it].hint.size
+        );
+
         append(*b, join(prefix, ext, "├───"));
-        append(*b, pprint_expr(map.keys[it], join(prefix, ext, "│   ")));
+        append(*b, pprint_expr(structure.members[it], join(prefix, ext, "│   ")));
 
         append(*b, join(prefix, ext, "VALUE\n"));
         append(*b, join(prefix, ext, "└───"));
-        append(*b, pprint_expr(map.values[it], join(prefix, ext, "    ")));
+        append(*b, pprint_expr(structure.values[it], join(prefix, ext, "    ")));
     }
 
     return builder_to_string(*b);
 }
-

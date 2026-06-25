@@ -1,0 +1,6 @@
+
+
+decl gnarly_expression = max(
+        min(3 + 4 * x, pow(2, sin(y) + 1)),
+        abs(-foo(bar(1, 2), baz(qux(3 + 4), 5)))
+    ) / (1 + sqrt(9) ^ (2 - log(8, 2)));

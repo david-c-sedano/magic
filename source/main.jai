@@ -66,6 +66,8 @@ MEME
 #load "tokenizer.jai";
 #load "parser.jai";
 #load "code_printer.jai";
+#load "visitor.jai";
+#load "typer.jai";
 
 #import "Basic";
 #import "Command_Line";

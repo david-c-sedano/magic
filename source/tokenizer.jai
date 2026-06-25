@@ -61,6 +61,7 @@ Token_Kind :: enum {
     CLOSE_BRACKET;
     OPEN_BRACE;
     CLOSE_BRACE;
+    HINT;
 
     IDENTIFIER;
 
@@ -78,6 +79,7 @@ Token_Kind :: enum {
     ELSE;
     WHILE;
     FU;
+    LOAD;
 }
 
 init_tokenizer_from_current_file :: (w: *Compiler_Workspace, t: *Tokenizer) -> bool {
@@ -466,6 +468,7 @@ get_token :: (using t: *Tokenizer) -> Token {
     case #char "]"; token.kind = .CLOSE_BRACKET;
     case #char "{"; token.kind = .OPEN_BRACE;
     case #char "}"; token.kind = .CLOSE_BRACE;
+    case #char "@"; token.kind = .HINT;
 
     /*  NOTE: I am NOT doing block comments in this language
         instead it will be python-style with multi-line strings serving as "comments"
@@ -493,6 +496,7 @@ get_token :: (using t: *Tokenizer) -> Token {
         case "false";  token.kind = .FALSE;
 
         case "decl";      token.kind = .DECL;
+        case "forward";   token.kind = .FORWARD;
         case "return";    token.kind = .RETURN;
         case "break";     token.kind = .BREAK;
         case "continue";  token.kind = .CONTINUE;
@@ -502,6 +506,7 @@ get_token :: (using t: *Tokenizer) -> Token {
         case "else";      token.kind = .ELSE;
         case "while";     token.kind = .WHILE;
         case "fu";        token.kind = .FU;
+        case "load";      token.kind = .LOAD;
         }
     }
 

@@ -1,25 +1,24 @@
 
-Parse_Node :: struct($T: Type) {
+AST_Node :: struct($T: Type) {
     source: string;
     file_name: string;
     pos: Source_Loc;
     end: Source_Loc;
-    kind: Parse_Node_Kind;
+    hint: Type_Hint;
+    kind: AST_Node_Kind;
     #if T != void using data: T;
 }
 
-Parse_Node_Kind :: enum {
+AST_Node_Kind :: enum {
     INVALID;
 
     IDENTIFIER;
 
     LITERAL_BEGIN;
         NONE; 
-        BOOLEAN;
         INTEGER;
         REAL;
         STRING;
-        CHAR;
     LITERAL_END;
 
     BINDING;
@@ -34,101 +33,102 @@ Parse_Node_Kind :: enum {
     WHILE_LOOP;
     FUNCTION;
     LIST;
-    MAP;
+    AGGREGATE;
+    LOAD;
 }
 
 /* AST NODE TYPES */
 Identifier :: struct {
-    kind_range :: Parse_Node_Kind.[ .IDENTIFIER ];
+    kind_range :: AST_Node_Kind.[ .IDENTIFIER ];
     text: string;
-} @parse_node
+} @ast
 
 Literal :: struct {
-    kind_range :: Parse_Node_Kind.[ .LITERAL_BEGIN, .LITERAL_END ];
+    kind_range :: AST_Node_Kind.[ .LITERAL_BEGIN, .LITERAL_END ];
     text: string;
-} @parse_node
+} @ast
 
 Binding :: struct {
-    kind_range :: Parse_Node_Kind.[ .BINDING ];
+    kind_range :: AST_Node_Kind.[ .BINDING ];
 
     forward: bool;
     name: Token;
-    rhs: *Parse_Node(void);
-} @parse_node
+    rhs: *AST_Node(void);
+} @ast
 
 Return :: struct {
-    kind_range :: Parse_Node_Kind.[ .RETURN_STATEMENT ];
-    result: *Parse_Node(void);
-} @parse_node
+    kind_range :: AST_Node_Kind.[ .RETURN_STATEMENT ];
+    result: *AST_Node(void);
+} @ast
 
 Break :: struct {
-    kind_range :: Parse_Node_Kind.[ .BREAK_STATEMENT ];
-} @parse_node
+    kind_range :: AST_Node_Kind.[ .BREAK_STATEMENT ];
+} @ast
 
 Continue :: struct {
-    kind_range :: Parse_Node_Kind.[ .CONTINUE_STATEMENT ];
-} @parse_node
+    kind_range :: AST_Node_Kind.[ .CONTINUE_STATEMENT ];
+} @ast
 
 Expr :: struct {
-    kind_range :: Parse_Node_Kind.[ .EXPRESSION ];
+    kind_range :: AST_Node_Kind.[ .EXPRESSION ];
 
     op: Token;
-    left: *Parse_Node(void);
-    right: *Parse_Node(void);
-} @parse_node
+    left: *AST_Node(void);
+    right: *AST_Node(void);
+} @ast
 
 Call :: struct {
-    kind_range :: Parse_Node_Kind.[ .CALL ];
+    kind_range :: AST_Node_Kind.[ .CALL ];
 
-    callee: *Parse_Node(void);
-    args: [..]*Parse_Node(void);
-} @parse_node
+    callee: *AST_Node(void);
+    args: [..]*AST_Node(void);
+} @ast
 
 Subscript :: struct {
-    kind_range :: Parse_Node_Kind.[ .SUBSCRIPT ];
+    kind_range :: AST_Node_Kind.[ .SUBSCRIPT ];
 
-    container: *Parse_Node(void);
-    index: *Parse_Node(void);
-} @parse_node
+    container: *AST_Node(void);
+    index: *AST_Node(void);
+} @ast
 
 Block :: struct {
-    kind_range :: Parse_Node_Kind.[ .BLOCK ];
-    code: [..]*Parse_Node(void);
-} @parse_node
+    kind_range :: AST_Node_Kind.[ .BLOCK ];
+    code: [..]*AST_Node(void);
+} @ast
 
 If_Else :: struct {
-    kind_range :: Parse_Node_Kind.[ .IF_ELSE ];
+    kind_range :: AST_Node_Kind.[ .IF_ELSE ];
 
-    cond: *Parse_Node(void);
-    if_body: *Parse_Node(void);
-    else_body: *Parse_Node(void);
-} @parse_node
+    cond: *AST_Node(void);
+    if_body: *AST_Node(void);
+    else_body: *AST_Node(void);
+} @ast
 
 While_Loop :: struct {
-    kind_range :: Parse_Node_Kind.[ .WHILE_LOOP ];
+    kind_range :: AST_Node_Kind.[ .WHILE_LOOP ];
 
-    cond: *Parse_Node(void);
-    body: *Parse_Node(void);
-} @parse_node
+    cond: *AST_Node(void);
+    body: *AST_Node(void);
+} @ast
 
 Function :: struct {
-    kind_range :: Parse_Node_Kind.[ .FUNCTION ];
+    kind_range :: AST_Node_Kind.[ .FUNCTION ];
 
-    params: [..]*Parse_Node(void);
-    body: *Parse_Node(void);
-} @parse_node
+    params: [..]*AST_Node(void);
+    body: *AST_Node(void);
+} @ast
 
 List :: struct {
-    kind_range :: Parse_Node_Kind.[ .LIST ];
-    items: [..]*Parse_Node(void);
-} @parse_node
+    kind_range :: AST_Node_Kind.[ .LIST ];
+    items: [..]*AST_Node(void);
+} @ast
 
-Map :: struct {
-    kind_range :: Parse_Node_Kind.[ .MAP ];
+Structure :: struct {
+    kind_range :: AST_Node_Kind.[ .AGGREGATE ];
 
-    keys: [..]*Parse_Node(void);
-    values: [..]*Parse_Node(void);
-} @parse_node
+    members: [..]*AST_Node(void);
+    values: [..]*AST_Node(void);
+} @ast
 
 Parser :: struct {
     tokenizer: Tokenizer;
@@ -140,9 +140,9 @@ Parser :: struct {
 }
 
 node_cast :: (
-    node: *Parse_Node, 
+    node: *AST_Node, 
     $to: Type 
-) -> *Parse_Node(to) {
+) -> *AST_Node(to) {
     if node == null return null;
 
     /*  `kind_range` can only be 1 or 2 items, 
@@ -150,25 +150,25 @@ node_cast :: (
     */
     #if to.kind_range.count == 1 {
         if node.kind == to.kind_range[0] {
-            return cast(*Parse_Node(to)) node;
+            return cast(*AST_Node(to)) node;
         }
     }
 
     #if to.kind_range.count == 2 {
         if to.kind_range[0] <= node.kind && node.kind <= to.kind_range[1] {
-            return cast(*Parse_Node(to)) node;
+            return cast(*AST_Node(to)) node;
         }
     }
 
     return null;
 }
 
-wrap_node :: (node: *Parse_Node($T)) -> *Parse_Node(void) {
-    return cast(*Parse_Node(void)) node;
+wrap_node :: (node: *AST_Node($T)) -> *AST_Node(void) {
+    return cast(*AST_Node(void)) node;
 }
 
-new_node :: ($T: Type, p: *Parser, kind: Parse_Node_Kind = .INVALID) -> *Parse_Node(T) {
-    node := New(Parse_Node(T),,p.workspace.allocator);
+new_node :: ($T: Type, p: *Parser, kind: AST_Node_Kind = .INVALID) -> *AST_Node(T) {
+    node := New(AST_Node(T),,p.workspace.allocator);
 
     #if T.kind_range.count == 1 {
         node.kind = T.kind_range[0];
@@ -208,7 +208,24 @@ expect_token :: (using p: *Parser, kinds: ..Token_Kind) -> Token, bool {
     return prev, false;
 }
 
-parse_binding :: (using p: *Parser) -> *Parse_Node(Binding) {
+optional_hint :: (using p: *Parser, node: *AST_Node(void)) -> Token, bool {
+    if curr.kind == .HINT {
+        next_token(p);
+        ident, has_ident := expect_token(p, .IDENTIFIER);
+        if !has_ident {
+            push_location(workspace, ident.pos, ident.end,
+                "expected an identifier after `@` for hint"
+            );
+            has_error = true;
+            return .{}, false;
+        }
+        node.hint = get_hint_from_token(ident);
+        return ident, true;
+    }
+    return .{}, false;
+}
+
+parse_binding :: (using p: *Parser) -> *AST_Node(Binding) {
     decl, has_decl := expect_token(p, .DECL, .FORWARD);
     assert(has_decl);
 
@@ -234,15 +251,30 @@ parse_binding :: (using p: *Parser) -> *Parse_Node(Binding) {
         return null;
     }
 
+    hint, has_hint := optional_hint(p, wrap_node(binding));
+    if has_error {
+        return null;
+    }
+    if has_hint {
+        binding.rhs = wrap_node(get_default_literal_from_type_hint(p, hint));
+        if has_error return null;
+        return binding;
+    }
+
     binding.rhs = parse_expr(p);
     if has_error {
         return null;
     }
     binding.end = binding.rhs.end;
+
+    optional_hint(p, wrap_node(binding));
+    if has_error {
+        return null;
+    }
     return binding;
 }
 
-parse_return :: (using p: *Parser) -> *Parse_Node(Return) {
+parse_return :: (using p: *Parser) -> *AST_Node(Return) {
     return_token, has_return := expect_token(p, .RETURN);
     assert(has_return);
 
@@ -262,7 +294,7 @@ parse_return :: (using p: *Parser) -> *Parse_Node(Return) {
     return return_stmnt;
 }
 
-parse_node :: (using p: *Parser) -> *Parse_Node(void) {
+parse_node :: (using p: *Parser) -> *AST_Node(void) {
 
     optional_semicolon :: () #expand {
         if `curr.kind == .SEMICOLON {
@@ -303,7 +335,6 @@ parse_node :: (using p: *Parser) -> *Parse_Node(void) {
         return wrap_node(cont_stmnt);
     }
 
-    /* DEFAULT TO EXPR CAUSE WE GOT EVERYTHING IN EXPR LEVEL!!! */
     expr := parse_expr(p);
     optional_semicolon();
     return expr;
@@ -338,18 +369,18 @@ prec_level :: (op: Token) -> int, right_binding: bool {
 }
 
 // Go Left Sometimes Parsing Technology (R)(TM)(C)
-parse_expr :: (using p: *Parser, min_prec := 0) -> *Parse_Node(void) {
+parse_expr :: (using p: *Parser, min_prec := 0) -> *AST_Node(void) {
 
-    parse_operand :: (using p: *Parser) -> *Parse_Node(void) {
+    parse_operand :: (using p: *Parser) -> *AST_Node(void) {
         token := curr;
 
-        make_literal :: (kind: Parse_Node_Kind) #expand {
+        make_literal :: (kind: AST_Node_Kind) -> *AST_Node(void) #expand {
             next_token(p);
             literal := new_node(Literal, p, kind);
             literal.pos = token.pos;
             literal.end = token.end;
             literal.text = copy_string(token.text);
-            `return wrap_node(literal);
+            return wrap_node(literal);
         }
 
         if token.kind == {
@@ -361,13 +392,18 @@ parse_expr :: (using p: *Parser, min_prec := 0) -> *Parse_Node(void) {
             ident.text = token.text;
             return wrap_node(ident);
 
-        case .NONE; make_literal(.NONE);
-        case .TRUE; make_literal(.BOOLEAN);
-        case .FALSE; make_literal(.BOOLEAN);
-        case .INTEGER; make_literal(.INTEGER);
-        case .REAL; make_literal(.REAL);
-        case .STRING; make_literal(.STRING);
-        case .CHAR; make_literal(.CHAR);
+        case .NONE; return make_literal(.NONE);
+        case .INTEGER; return make_literal(.INTEGER);
+        case .REAL; return make_literal(.REAL);
+        case .STRING; return make_literal(.STRING);
+
+        // auto-assign hint
+        case .TRUE; #through;
+        case .FALSE; #through;
+        case .CHAR;
+            literal := make_literal(.INTEGER);
+            literal.hint = Type_Hint.{ size = 8, flag = .UNSIGNED };
+            return wrap_node(literal);
 
         case .MINUS;       #through;
         case .LOGICAL_NOT; #through;
@@ -439,11 +475,11 @@ parse_expr :: (using p: *Parser, min_prec := 0) -> *Parse_Node(void) {
             return wrap_node(list);
 
         case .OPEN_BRACE;
-            map := parse_map(p);
+            structure := parse_struct(p);
             if has_error {
                 return null;
             }
-            return wrap_node(map);
+            return wrap_node(structure);
 
         case;
             push_location(workspace, token.pos, token.end,
@@ -493,7 +529,7 @@ parse_expr :: (using p: *Parser, min_prec := 0) -> *Parse_Node(void) {
             }
             next_token(p);
    
-            right: *Parse_Node(void);
+            right: *AST_Node(void);
             if right_binding {
                 right = parse_expr(p, prec);
             } else {
@@ -519,7 +555,7 @@ parse_expr :: (using p: *Parser, min_prec := 0) -> *Parse_Node(void) {
     return left;
 }
 
-parse_call :: (using p: *Parser, callee: *Parse_Node(void)) -> *Parse_Node(Call) {
+parse_call :: (using p: *Parser, callee: *AST_Node(void)) -> *AST_Node(Call) {
     _,has_oparen := expect_token(p, .OPEN_PAREN);
     assert(has_oparen);
 
@@ -561,7 +597,7 @@ parse_call :: (using p: *Parser, callee: *Parse_Node(void)) -> *Parse_Node(Call)
     return call;
 }
 
-parse_subscript :: (using p: *Parser, subscriptee: *Parse_Node(void)) -> *Parse_Node(Subscript) {
+parse_subscript :: (using p: *Parser, subscriptee: *AST_Node(void)) -> *AST_Node(Subscript) {
     _,has_obracket := expect_token(p, .OPEN_BRACKET);
     assert(has_obracket);
 
@@ -586,7 +622,7 @@ parse_subscript :: (using p: *Parser, subscriptee: *Parse_Node(void)) -> *Parse_
     return subscript;
 }
 
-parse_block :: (using p: *Parser) -> *Parse_Node(Block) {
+parse_block :: (using p: *Parser) -> *AST_Node(Block) {
     in, has_in := expect_token(p, .IN);
     if !has_in {
         push_location(workspace, in.pos, in.end,
@@ -649,7 +685,7 @@ parse_block :: (using p: *Parser) -> *Parse_Node(Block) {
     its more like a whole new if-else in an else branch and so on, the tree gets DEEPER, not longer
     `pprint_if_else` makes it way easier to understand than any explanation though..
 */
-parse_if_else :: (using p: *Parser) -> *Parse_Node(If_Else) {
+parse_if_else :: (using p: *Parser) -> *AST_Node(If_Else) {
     if_token, has_if_token := expect_token(p, .IF);
     assert(has_if_token);
 
@@ -746,7 +782,7 @@ parse_if_else :: (using p: *Parser) -> *Parse_Node(If_Else) {
     return if_else;
 }
 
-parse_while :: (using p: *Parser) -> *Parse_Node(While_Loop) {
+parse_while :: (using p: *Parser) -> *AST_Node(While_Loop) {
     while_token, has_while_token := expect_token(p, .WHILE);
     assert(has_while_token);
 
@@ -766,7 +802,7 @@ parse_while :: (using p: *Parser) -> *Parse_Node(While_Loop) {
     return while_loop;
 }
 
-parse_function :: (using p: *Parser) -> *Parse_Node(Function) {
+parse_function :: (using p: *Parser) -> *AST_Node(Function) {
     keyw, has_keyw := expect_token(p, .FU);
     assert(has_keyw);
 
@@ -810,7 +846,7 @@ parse_function :: (using p: *Parser) -> *Parse_Node(Function) {
     return func;
 }
 
-parse_list :: (using p: *Parser) -> *Parse_Node(List) {
+parse_list :: (using p: *Parser) -> *AST_Node(List) {
     obracket, has_obracket := expect_token(p, .OPEN_BRACKET);
     assert(has_obracket);
 
@@ -836,45 +872,73 @@ parse_list :: (using p: *Parser) -> *Parse_Node(List) {
     return list;
 }
 
-parse_map :: (using p: *Parser) -> *Parse_Node(Map) {
+parse_struct :: (using p: *Parser) -> *AST_Node(Structure) {
     obrace, has_obrace := expect_token(p, .OPEN_BRACE);
     assert(has_obrace);
 
-    map := new_node(Map, p);
-    map.pos = obrace.pos;
-    map.kind = .MAP;
+    structure := new_node(Structure, p);
+    structure.pos = obrace.pos;
+    structure.kind = .AGGREGATE;
 
     while 1 {
         if curr.kind == .CLOSE_BRACE {
-            map.end = curr.end;
+            structure.end = curr.end;
             next_token(p);
             break;
         }
 
-        array_add(*map.keys, parse_expr(p));
-        if has_error {
+        ident, has_member := expect_token(p, .IDENTIFIER);
+        if !has_member {
+            push_location(workspace, ident.pos, ident.end,
+                "expected an identifier as member of struct",
+            );
+            has_error = true;
             return null;
         }
+        member := new_node(Identifier, p);
+        member.pos = ident.pos;
+        member.end = ident.end;
+        member.text = ident.text;
+        array_add(*structure.members, wrap_node(member));
 
-        if curr.kind != .COLON {
+        if curr.kind != .ASSIGN {
             push_location(workspace, curr.pos, curr.end,
-                "expected a colon to separate keys and values in map",
+                "expected an `=` to separate members and values in struct",
             );
             has_error = true;
             return null;
         }
         next_token(p);
 
-        array_add(*map.values, parse_expr(p));
+        hint, has_hint := optional_hint(p, wrap_node(member));
+        if has_error {
+            return null;
+        }
+        if has_hint {
+            default_value := wrap_node(get_default_literal_from_type_hint(p, hint));
+            if has_error return null;
+            array_add(*structure.values, default_value);
+            if curr.kind == .SEMICOLON {
+                next_token(p);
+            }
+
+            continue;
+        }
+
+        array_add(*structure.values, parse_expr(p));
+        if has_error {
+            return null;
+        }
+        optional_hint(p, wrap_node(member));
         if has_error {
             return null;
         }
 
-        if curr.kind == .COMMA {
+        if curr.kind == .SEMICOLON {
             next_token(p);
         }
     }
    
-    return map;
+    return structure;
 }
 
