@@ -17,6 +17,21 @@ reset_ast_rendering :: () {
     reset(*context.code_printer_arena, overwrite_memory = true);
 }
 
+add_hint :: (hint: Type_Hint) #expand {
+    b := *(`b);
+
+    if hint.key == "" {
+        print_to_builder(b, "\n");
+        return;
+    }
+
+    if hint.kind == .UNKNOWN {
+        print_to_builder(b, ": %\n", hint.key);
+    } else {
+        print_to_builder(b, ": % %bit\n", hint.kind, hint.size);
+    }
+}
+
 pprint_binding :: (binding: *AST_Node(Binding), prefix := "") -> string {
     b := get_builder_for_ast_rendering(); 
 
@@ -27,14 +42,7 @@ pprint_binding :: (binding: *AST_Node(Binding), prefix := "") -> string {
             "DECL %",
         binding.name.text
     );
-
-    print_to_builder(*b, 
-        ifx binding.hint.flag != .UNKNOWN then
-            ": % %bit\n"
-        else
-            "\n",
-        binding.hint.flag, binding.hint.size
-    );
+    add_hint(binding.hint);
 
     append(*b, join(prefix, "└───"));
     append(*b, pprint_expr(binding.rhs, join(prefix, "    ")));
@@ -149,9 +157,9 @@ pprint_expr :: (node: *AST_Node(void), prefix := "", mark_block := true, cont :=
             return;
         }
 
-        list := node_cast(node, List);
-        if list != null {
-            append(b, pprint_list(list, prefix));
+        array := node_cast(node, Array);
+        if array != null {
+            append(b, pprint_array(array, prefix));
             return;
         }
 
@@ -292,12 +300,20 @@ pprint_while :: (while_loop: *AST_Node(While_Loop), prefix := "") -> string {
 pprint_function :: (func: *AST_Node(Function), prefix := "") -> string {
     b := get_builder_for_ast_rendering(); 
 
-    append(*b, "FUNCTION\n");
+    append(*b, "FUNCTION");
+    add_hint(func.hint);
 
-    for func.params {
-        is_last := it_index == func.params.count - 1;
-        append(*b, join(prefix, "├───"));
-        append(*b, pprint_expr(it, join(prefix, "│   ")));
+    for 0..func.params.count-1 {
+        name := node_cast(func.params[it], Identifier);
+        assert(name != null);
+        print_to_builder(*b, "%├───[%]", prefix, name.text);
+        add_hint(name.hint);
+
+        if func.default_values[it].kind != .INVALID {
+            print_to_builder(*b, "%│   └───%", prefix,
+                pprint_expr(func.default_values[it], join(prefix, "│       "))
+            );
+        }
     }
 
     print_to_builder(*b, "%BODY\n", prefix);
@@ -306,12 +322,12 @@ pprint_function :: (func: *AST_Node(Function), prefix := "") -> string {
     return builder_to_string(*b);
 }
 
-pprint_list :: (list: *AST_Node(List), prefix := "") -> string {
+pprint_array :: (array: *AST_Node(Array), prefix := "") -> string {
     b := get_builder_for_ast_rendering(); 
 
     append(*b, "LIST\n");
-    for list.items {
-        is_last := it_index == list.items.count - 1;
+    for array.items {
+        is_last := it_index == array.items.count - 1;
         branch := ifx is_last then "└───" else "├───";
         append(*b, join(prefix, branch));
 
@@ -332,11 +348,11 @@ pprint_struct :: (structure: *AST_Node(Structure), prefix := "") -> string {
         append(*b, join(prefix, ifx is_last then "└───MEMBER" else "├───MEMBER"));
 
         print_to_builder(*b, 
-            ifx structure.members[it].hint.flag != .UNKNOWN then
+            ifx structure.members[it].hint.kind != .UNKNOWN then
                 ": % %bit\n"
             else
                 "\n",
-            structure.members[it].hint.flag, structure.members[it].hint.size
+            structure.members[it].hint.kind, structure.members[it].hint.size
         );
 
         append(*b, join(prefix, ext, "├───"));

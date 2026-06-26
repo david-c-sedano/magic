@@ -61,7 +61,6 @@ Token_Kind :: enum {
     CLOSE_BRACKET;
     OPEN_BRACE;
     CLOSE_BRACE;
-    HINT;
 
     IDENTIFIER;
 
@@ -468,7 +467,6 @@ get_token :: (using t: *Tokenizer) -> Token {
     case #char "]"; token.kind = .CLOSE_BRACKET;
     case #char "{"; token.kind = .OPEN_BRACE;
     case #char "}"; token.kind = .CLOSE_BRACE;
-    case #char "@"; token.kind = .HINT;
 
     /*  NOTE: I am NOT doing block comments in this language
         instead it will be python-style with multi-line strings serving as "comments"

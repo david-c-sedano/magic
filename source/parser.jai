@@ -15,6 +15,7 @@ AST_Node_Kind :: enum {
     IDENTIFIER;
 
     LITERAL_BEGIN;
+        PLACEHOLDER; // to be filled in later with type info
         NONE; 
         INTEGER;
         REAL;
@@ -32,8 +33,8 @@ AST_Node_Kind :: enum {
     IF_ELSE;
     WHILE_LOOP;
     FUNCTION;
-    LIST;
-    AGGREGATE;
+    ARRAY;
+    STRUCT;
     LOAD;
 }
 
@@ -115,16 +116,17 @@ Function :: struct {
     kind_range :: AST_Node_Kind.[ .FUNCTION ];
 
     params: [..]*AST_Node(void);
+    default_values: [..]*AST_Node(void);
     body: *AST_Node(void);
 } @ast
 
-List :: struct {
-    kind_range :: AST_Node_Kind.[ .LIST ];
+Array :: struct {
+    kind_range :: AST_Node_Kind.[ .ARRAY ];
     items: [..]*AST_Node(void);
 } @ast
 
 Structure :: struct {
-    kind_range :: AST_Node_Kind.[ .AGGREGATE ];
+    kind_range :: AST_Node_Kind.[ .STRUCT ];
 
     members: [..]*AST_Node(void);
     values: [..]*AST_Node(void);
@@ -184,6 +186,14 @@ new_node :: ($T: Type, p: *Parser, kind: AST_Node_Kind = .INVALID) -> *AST_Node(
     return node;
 }
 
+placeholder_node :: (p: *Parser, hint_loc: Token) -> *AST_Node(Literal) {
+    placeholder := new_node(Literal, p, .PLACEHOLDER);
+    placeholder.pos = hint_loc.pos;
+    placeholder.end = hint_loc.end;
+    placeholder.text = hint_loc.text;
+    return placeholder; 
+}
+
 init_parser_from_current_file :: (w: *Compiler_Workspace, parser: *Parser) -> bool {
     parser.workspace = w;
     if !init_tokenizer_from_current_file(w, *parser.tokenizer) {
@@ -208,16 +218,16 @@ expect_token :: (using p: *Parser, kinds: ..Token_Kind) -> Token, bool {
     return prev, false;
 }
 
-optional_hint :: (using p: *Parser, node: *AST_Node(void)) -> Token, bool {
-    if curr.kind == .HINT {
+optional_hint :: (using p: *Parser, node: *AST_Node(void)) -> Token, bool #expand {
+    if curr.kind == .COLON {
         next_token(p);
         ident, has_ident := expect_token(p, .IDENTIFIER);
         if !has_ident {
             push_location(workspace, ident.pos, ident.end,
-                "expected an identifier after `@` for hint"
+                "expected an identifier after `:` for type hint"
             );
             has_error = true;
-            return .{}, false;
+            `return null;
         }
         node.hint = get_hint_from_token(ident);
         return ident, true;
@@ -252,11 +262,8 @@ parse_binding :: (using p: *Parser) -> *AST_Node(Binding) {
     }
 
     hint, has_hint := optional_hint(p, wrap_node(binding));
-    if has_error {
-        return null;
-    }
     if has_hint {
-        binding.rhs = wrap_node(get_default_literal_from_type_hint(p, hint));
+        binding.rhs = wrap_node(placeholder_node(p, hint));
         if has_error return null;
         return binding;
     }
@@ -268,9 +275,6 @@ parse_binding :: (using p: *Parser) -> *AST_Node(Binding) {
     binding.end = binding.rhs.end;
 
     optional_hint(p, wrap_node(binding));
-    if has_error {
-        return null;
-    }
     return binding;
 }
 
@@ -402,7 +406,7 @@ parse_expr :: (using p: *Parser, min_prec := 0) -> *AST_Node(void) {
         case .FALSE; #through;
         case .CHAR;
             literal := make_literal(.INTEGER);
-            literal.hint = Type_Hint.{ size = 8, flag = .UNSIGNED };
+            literal.hint = Type_Hint.{ size = 8, kind = .UNSIGNED };
             return wrap_node(literal);
 
         case .MINUS;       #through;
@@ -468,11 +472,11 @@ parse_expr :: (using p: *Parser, min_prec := 0) -> *AST_Node(void) {
             return wrap_node(function);
 
         case .OPEN_BRACKET;
-            list := parse_list(p);
+            array := parse_array(p);
             if has_error {
                 return null;
             }
-            return wrap_node(list);
+            return wrap_node(array);
 
         case .OPEN_BRACE;
             structure := parse_struct(p);
@@ -802,6 +806,7 @@ parse_while :: (using p: *Parser) -> *AST_Node(While_Loop) {
     return while_loop;
 }
 
+// TODO: variadic arguments
 parse_function :: (using p: *Parser) -> *AST_Node(Function) {
     keyw, has_keyw := expect_token(p, .FU);
     assert(has_keyw);
@@ -809,7 +814,7 @@ parse_function :: (using p: *Parser) -> *AST_Node(Function) {
     oparen, has_oparen := expect_token(p, .OPEN_PAREN);
     if !has_oparen {
         push_location(workspace, oparen.pos, oparen.end, 
-            "expected parameters in function"
+            "expected parentheses and params after `fu` keyword"
         );
         has_error = true;
         return null;
@@ -818,24 +823,68 @@ parse_function :: (using p: *Parser) -> *AST_Node(Function) {
     func := new_node(Function, p);
     func.pos = keyw.pos;
 
-    // parse params
     while 1 {
         if curr.kind == .CLOSE_PAREN {
+            func.end = curr.end;
             next_token(p);
             break;
         }
 
-        // evaluator/checker needs to enforce either identifiers or assignments
-        param := parse_expr(p);
-        if has_error {
+        ident, has_param := expect_token(p, .IDENTIFIER);
+        if !has_param {
+            push_location(workspace, ident.pos, ident.end,
+                "expected an identifier as parameter name",
+            );
+            has_error = true;
             return null;
         }
-        array_add(*func.params, param); 
+        param := new_node(Identifier, p);
+        param.pos = ident.pos;
+        param.end = ident.end;
+        param.text = ident.text;
+        array_add(*func.params, wrap_node(param));
+       
+        if curr.kind == .ASSIGN {
+            next_token(p);
+
+            // allow for `x =: <type>` (allow default arg to be initializer for type)
+            hint, has_hint := optional_hint(p, wrap_node(param));
+            if has_hint {
+                default_value := wrap_node(placeholder_node(p, hint));
+                array_add(*func.default_values, default_value);
+                if curr.kind == .COMMA next_token(p);
+                continue;
+            }
+           
+            // allow for `x = <expr> : <type>`
+            array_add(*func.default_values, parse_expr(p));
+            optional_hint(p, wrap_node(param));
+        } else {
+            // allow for `x: <type>`
+            hint, has_hint := optional_hint(p, wrap_node(param));
+            if has_hint {
+                force_no_arg := placeholder_node(p, hint);
+                force_no_arg.kind = .INVALID;
+                array_add(*func.default_values, wrap_node(force_no_arg));
+                if curr.kind == .COMMA next_token(p);
+                continue;
+            }
+
+            // or just `x`
+            force_no_arg := new_node(Literal, p, .PLACEHOLDER);
+            force_no_arg.kind = .INVALID;
+            force_no_arg.pos = param.pos;
+            force_no_arg.end = param.end;
+            array_add(*func.default_values, wrap_node(force_no_arg));
+        }
 
         if curr.kind == .COMMA {
             next_token(p);
         }
     }
+
+    // allow for return type `fu(..<params>): <type>`
+    optional_hint(p, wrap_node(func));
 
     func.body = parse_expr(p);
     if has_error {
@@ -846,20 +895,20 @@ parse_function :: (using p: *Parser) -> *AST_Node(Function) {
     return func;
 }
 
-parse_list :: (using p: *Parser) -> *AST_Node(List) {
+parse_array :: (using p: *Parser) -> *AST_Node(Array) {
     obracket, has_obracket := expect_token(p, .OPEN_BRACKET);
     assert(has_obracket);
 
-    list := new_node(List, p);
-    list.pos = obracket.pos;
+    array := new_node(Array, p);
+    array.pos = obracket.pos;
     while 1 {
         if curr.kind == .CLOSE_BRACKET {
-            list.end = curr.end;
+            array.end = curr.end;
             next_token(p);
             break;
         }
 
-        array_add(*list.items, parse_expr(p));
+        array_add(*array.items, parse_expr(p));
         if has_error {
             return null;
         }
@@ -869,7 +918,7 @@ parse_list :: (using p: *Parser) -> *AST_Node(List) {
         }
     }
    
-    return list;
+    return array;
 }
 
 parse_struct :: (using p: *Parser) -> *AST_Node(Structure) {
@@ -878,7 +927,6 @@ parse_struct :: (using p: *Parser) -> *AST_Node(Structure) {
 
     structure := new_node(Structure, p);
     structure.pos = obrace.pos;
-    structure.kind = .AGGREGATE;
 
     while 1 {
         if curr.kind == .CLOSE_BRACE {
@@ -911,17 +959,13 @@ parse_struct :: (using p: *Parser) -> *AST_Node(Structure) {
         next_token(p);
 
         hint, has_hint := optional_hint(p, wrap_node(member));
-        if has_error {
-            return null;
-        }
         if has_hint {
-            default_value := wrap_node(get_default_literal_from_type_hint(p, hint));
+            default_value := wrap_node(placeholder_node(p, hint));
             if has_error return null;
             array_add(*structure.values, default_value);
             if curr.kind == .SEMICOLON {
                 next_token(p);
             }
-
             continue;
         }
 
@@ -929,11 +973,8 @@ parse_struct :: (using p: *Parser) -> *AST_Node(Structure) {
         if has_error {
             return null;
         }
-        optional_hint(p, wrap_node(member));
-        if has_error {
-            return null;
-        }
 
+        optional_hint(p, wrap_node(member));
         if curr.kind == .SEMICOLON {
             next_token(p);
         }

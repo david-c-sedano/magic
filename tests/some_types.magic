@@ -1,19 +1,25 @@
 
 
-decl myint = 69 @s64;
-decl myuint = in 69 end @u64;
-decl myfloat = 69.420 @float32;
+decl myint = 69 : s64;
+decl myuint = in 69 end : u64;
+decl myfloat = 69.420 : float32;
 
-decl zero = @s64;
+decl zero =: s64;
 
 decl vector2 = {
-    x = @s32;
-    y = @s32;
+    x =: s32;
+    y =: s32;
 };
 
 decl vector2_initialized_with_5s = {
-    x = 5 @s32;
-    y = in 5 end @s32;
+    x = 5 : s32;
+    y = in 5 end : s32;
 };
 
-decl wrong = @deez_nuts;
+decl add = fu(a: deez_nuts, b, c=6*9/(4+2)+0, d=69+420 : s32): s64
+    a + b + c + d;
+
+add(1, 2);
+
+decl wrong =: deez_nuts;
+
