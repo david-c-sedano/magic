@@ -81,6 +81,13 @@ pprint_node :: (node: *AST_Node(void), prefix := "") -> string {
         return "CONTINUE\n"; // ez
     }
 
+    load := node_cast(node, Load);
+    if load != null {
+        b := get_builder_for_ast_rendering(); 
+        print_to_builder(*b, "LOAD \"%\"\n", load.path);
+        return builder_to_string(*b);
+    }
+
     /* DEFAULT TO EXPR CAUSE WE GOT EVERYTHING IN EXPR LEVEL!!! */
     return pprint_expr(node, prefix);
 }

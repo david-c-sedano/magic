@@ -132,6 +132,11 @@ Structure :: struct {
     values: [..]*AST_Node(void);
 } @ast
 
+Load :: struct {
+    kind_range :: AST_Node_Kind.[ .LOAD ];
+    path: string;
+}
+
 Parser :: struct {
     tokenizer: Tokenizer;
     prev: Token;
@@ -337,6 +342,11 @@ parse_node :: (using p: *Parser) -> *AST_Node(void) {
         next_token(p);
         optional_semicolon();
         return wrap_node(cont_stmnt);
+
+    case .LOAD;
+        load := parse_load(p);
+        optional_semicolon();
+        return wrap_node(load);
     }
 
     expr := parse_expr(p);
@@ -569,7 +579,10 @@ parse_call :: (using p: *Parser, callee: *AST_Node(void)) -> *AST_Node(Call) {
     if curr.kind != .CLOSE_PAREN {
         while 1 {
             if curr.kind == .COMMA {
-                array_add(*call.args, null);
+                placeholder := new_node(Literal, p, .PLACEHOLDER);
+                placeholder.pos = curr.pos;
+                placeholder.end = curr.end;
+                array_add(*call.args, wrap_node(placeholder));
                 /* DONT SKIP THE COMMA HERE ELSE `( ,` DOESNT COUNT AS AN EMPTY SLOT
                    WE SKIP THE COMMA LATER OK */
             } else {
@@ -583,7 +596,10 @@ parse_call :: (using p: *Parser, callee: *AST_Node(void)) -> *AST_Node(Call) {
                 next_token(p);
                 // GOTTA MAKE `, )` COUNT AS AN EMPTY SLOT AS WELL
                 if curr.kind == .CLOSE_PAREN {
-                    array_add(*call.args, null);
+                    placeholder := new_node(Literal, p, .PLACEHOLDER);
+                    placeholder.pos = curr.pos;
+                    placeholder.end = curr.end;
+                    array_add(*call.args, wrap_node(placeholder));
                 }
             }
 
@@ -983,3 +999,23 @@ parse_struct :: (using p: *Parser) -> *AST_Node(Structure) {
     return structure;
 }
 
+parse_load :: (using p: *Parser) -> *AST_Node(Load) {
+    load_token, has_load := expect_token(p, .LOAD);
+    assert(has_load);
+
+    path, has_file := expect_token(p, .STRING);
+    if !has_file {
+        push_location(workspace, path.pos, path.end,
+            "expected path to file after `load` here"
+        );
+        has_error = true;
+        return null;
+    }
+
+    load := new_node(Load, p);
+    load.pos = load_token.pos;
+    load.end = path.end;
+    load.path = path.text;
+
+    return load;
+}
