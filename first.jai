@@ -83,7 +83,7 @@ CODE);
 ast_types: [..]string;
 
 just_run_it: bool;
-FILE_FOR_EZ_TESTING :: "./tests/some_types.magic";
+FILE_FOR_EZ_TESTING :: "./scratch.magic";
 
 #import "Basic";
 #import "Compiler";

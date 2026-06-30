@@ -41,17 +41,14 @@ struct_member_loop_unroll :: ($T: Type, struct_instance_name: string, body: Code
     }
 }
 
-post_order_walk :: (
-    node: *AST_Node(void),
-    extra_data: *void,
-    visit: (*AST_Node(void), *void) -> *AST_Node(void)
-) -> *AST_Node(void) {
-
-    if node == null return null;
+post_order_walk :: (node: *AST_Node(void), workspace: *Compiler_Workspace, 
+    visit: (*AST_Node(void), *Compiler_Workspace)
+) {
+    if node == null return;
 
     // yes, you have to repeatedly backtick the variables to use them in nested macro scope 
     ast_loop_unroll(#code {
-        extra_data := `extra_data;
+        workspace := `workspace;
         visit := `visit;
         node := `node;
         matched := node_cast(node, it);
@@ -59,39 +56,34 @@ post_order_walk :: (
         if matched != null {
             struct_member_loop_unroll(it, "matched", 
             #code {
-                extra_data := `extra_data;
+                workspace := `workspace;
                 visit := `visit;
 
                 #if type_of(member) == *AST_Node(void) {
-                    member = post_order_walk(member, extra_data, visit);
+                    post_order_walk(member, workspace, visit);
                 }
 
                 #if type_of(member) == [..]*AST_Node(void) {
                     for member {
-                        member[it_index] = post_order_walk(it, extra_data, visit);
+                        post_order_walk(it, workspace, visit);
                     }
                 }
             });
         }
     });
 
-    node = visit(node, extra_data);
-
-    return node;
+    visit(node, workspace);
 }
 
-pre_order_walk :: (
-    node: *AST_Node(void),
-    extra_data: *void,
-    visit: (*AST_Node(void), *void) -> *AST_Node(void)
-) -> *AST_Node(void) {
+pre_order_walk :: (node: *AST_Node(void), workspace: *Compiler_Workspace, 
+    visit: (*AST_Node(void), *Compiler_Workspace)
+) {
+    if node == null return;
 
-    if node == null return null;
-
-    node = visit(node, extra_data);
+    visit(node, workspace);
 
     ast_loop_unroll(#code {
-        extra_data := `extra_data;
+        workspace := `workspace;
         visit := `visit;
         node := `node;
         matched := node_cast(node, it);
@@ -99,23 +91,21 @@ pre_order_walk :: (
         if matched != null {
             struct_member_loop_unroll(it, "matched", 
             #code {
-                extra_data := `extra_data;
+                workspace := `workspace;
                 visit := `visit;
 
                 #if type_of(member) == *AST_Node(void) {
-                    member = pre_order_walk(member, extra_data, visit);
+                    pre_order_walk(member, workspace, visit);
                 }
 
                 #if type_of(member) == [..]*AST_Node(void) {
                     for member {
-                        member[it_index] = pre_order_walk(it, extra_data, visit);
+                        pre_order_walk(it, workspace, visit);
                     }
                 }
             });
         }
     });
-
-    return node;
 }
 
 // copying is a bit tricky because you are not mutating in place

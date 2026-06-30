@@ -20,9 +20,14 @@ Compiler_Workspace :: struct {
     current_file_being_worked_on: string;
     messages: [..]Message;
 
+    type_related_errors: int;
+    unknown_nodes: [..]*AST_Node(void);
+
     allocator: Allocator;
+    execution_allocator: Allocator;
 }
 
+// NOTE: i dont think the allocators are set for `messages` and `sources`
 get_current_file_source :: (using w: *Compiler_Workspace) -> string, bool {
     assert(current_file_being_worked_on != "");
     source, ok := table_find(*sources, current_file_being_worked_on);
@@ -58,6 +63,17 @@ push_location :: (using w: *Compiler_Workspace, start: Source_Loc, end: Source_L
     msg.file_name = current_file_being_worked_on;
     msg.start = start;
     msg.end = end;
+    array_add(*messages, msg);
+}
+
+mark_node :: (using w: *Compiler_Workspace, node: *AST_Node($T), msg_text: string, fmt: ..Any) {
+    msg: Message;
+    msg.is_error = true;
+    msg.text = sprint(msg_text, ..fmt);
+    msg.source = get_current_file_source(w);
+    msg.file_name = current_file_being_worked_on;
+    msg.start = node.pos;
+    msg.end = node.end;
     array_add(*messages, msg);
 }
 

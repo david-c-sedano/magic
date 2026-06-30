@@ -16,7 +16,9 @@ AST_Node_Kind :: enum {
 
     LITERAL_BEGIN;
         PLACEHOLDER; // to be filled in later with type info
-        NONE; 
+        NONE;
+        BOOL;
+        CHAR;
         INTEGER;
         REAL;
         STRING;
@@ -234,7 +236,7 @@ optional_hint :: (using p: *Parser, node: *AST_Node(void)) -> Token, bool #expan
             has_error = true;
             `return null;
         }
-        node.hint = get_hint_from_token(ident);
+        node.hint.key = ident.text;
         return ident, true;
     }
     return .{}, false;
@@ -407,17 +409,12 @@ parse_expr :: (using p: *Parser, min_prec := 0) -> *AST_Node(void) {
             return wrap_node(ident);
 
         case .NONE; return make_literal(.NONE);
+        case .TRUE; return make_literal(.BOOL);
+        case .FALSE; return make_literal(.BOOL);
+        case .CHAR; return make_literal(.CHAR);
         case .INTEGER; return make_literal(.INTEGER);
         case .REAL; return make_literal(.REAL);
         case .STRING; return make_literal(.STRING);
-
-        // auto-assign hint
-        case .TRUE; #through;
-        case .FALSE; #through;
-        case .CHAR;
-            literal := make_literal(.INTEGER);
-            literal.hint = Type_Hint.{ size = 8, kind = .UNSIGNED };
-            return wrap_node(literal);
 
         case .MINUS;       #through;
         case .LOGICAL_NOT; #through;

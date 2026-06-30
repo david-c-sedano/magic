@@ -28,17 +28,24 @@ main :: () {
             return;
         }
 
+        node: *AST_Node(void);
         while root_parser.curr.kind != .EOF {
-            node := parse_node(*root_parser);
+            node = parse_node(*root_parser);
             if root_parser.has_error {
                 flush_messages(*root);
                 return;
             }
-
-            print("%\n", pprint_node(node));
-            reset_ast_rendering();
         }
-    
+
+        infer_types(*root, node);
+        check_for_unknown_types(*root, node);
+        print("UNKNOWN NODES: %\n", root.unknown_nodes.count);
+
+        program: Bytecode_Program;
+        program.workspace = *root;
+        emit_expr(*program, node);
+        print("%\n", pprint_bytecode_program(*program));
+
     } else {
         print(meme1);
     }
@@ -68,6 +75,7 @@ MEME
 #load "code_printer.jai";
 #load "visitor.jai";
 #load "typer.jai";
+#load "bytecode.jai";
 
 #import "Basic";
 #import "Command_Line";
