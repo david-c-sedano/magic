@@ -1,11 +1,12 @@
 
-package fourth
+package magic
 
 import lex "Godlex"
 
 import "core:fmt"
 import "core:mem"
 import "core:strings"
+
 import win32 "core:sys/windows"
 
 main :: proc() {
@@ -32,7 +33,9 @@ main :: proc() {
 		}
 	}
 
-    win32.SetConsoleOutputCP(.UTF8)
+    when ODIN_OS == .Windows {
+        win32.SetConsoleOutputCP(.UTF8)
+    }
    
     /*
     g,_ := lex.make_character_grouper(

@@ -1,5 +1,5 @@
 
-package fourth
+package magic
 
 import "core:strings"
 import "core:fmt"

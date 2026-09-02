@@ -1,5 +1,5 @@
 
-package fourth
+package magic
 
 import lex "Godlex"
 import "core:fmt"

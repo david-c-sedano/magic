@@ -1,5 +1,5 @@
 
-package fourth
+package magic 
 
 import lex "Godlex"
 import vmem "core:mem/virtual"
