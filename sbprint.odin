@@ -20,6 +20,16 @@ sbprint :: proc(node: ^Link, b: ^strings.Builder, prefix := "") {
         fmt.sbprintf(b, "break\n")
         return
     }
+
+    if push := node_cast(Push, node); push != nil {
+        fmt.sbprintf(b, "push %s\n", push.type)
+        return
+    }
+
+    if field := node_cast(Layout_Field, node); field != nil {
+        fmt.sbprintf(b, "%s: %s\n", field.name, field.type)
+        return
+    }
     
     if decl := node_cast(Decl, node) ; decl != nil {
         if decl.forward {
@@ -77,7 +87,7 @@ sbprint :: proc(node: ^Link, b: ^strings.Builder, prefix := "") {
         for node, i in block.code {
             is_last := i == len(block.code) - 1
             next_prefix: string
-         if !is_last {
+            if !is_last {
                 fmt.sbprintf(b, "%s%s", prefix, "├───")
                 next_prefix = strings.join({prefix, "│   "},"")
             } else {
@@ -157,7 +167,7 @@ sbprint :: proc(node: ^Link, b: ^strings.Builder, prefix := "") {
         return
     }
     
-    if func := node_cast(Function, node) ; func != nil {
+    if func := node_cast(Function, node); func != nil {
         fmt.sbprintf(b, "function\n")
         
         if len(func.params) == 0 {
@@ -176,6 +186,25 @@ sbprint :: proc(node: ^Link, b: ^strings.Builder, prefix := "") {
         next_prefix := strings.join({prefix, "    "},"")
         sbprint(func.body, b, next_prefix)
         delete(next_prefix)
+        return
+    }
+
+    if layout := node_cast(Layout, node); layout != nil {
+        fmt.sbprintf(b, "layout %s\n", layout.name)
+
+        for node, i in layout.fields {
+            is_last := i == len(layout.fields) - 1
+            next_prefix: string
+            if !is_last {
+                fmt.sbprintf(b, "%s%s", prefix, "├───")
+                next_prefix = strings.join({prefix, "│   "},"")
+            } else {
+                fmt.sbprintf(b, "%s%s", prefix, "└───")
+                next_prefix = strings.join({prefix, "    "},"")
+            }
+            sbprint(node, b, next_prefix)
+            delete(next_prefix)
+        }
         return
     }
 

@@ -61,17 +61,14 @@ main :: proc() {
     g,_ := lex.make_character_grouper(
         "test", 
         `
-        decl count = 0
-        while count <= 100 do
-            if count % 15 == 0 do
-                print("fizzbuzz")
-            else if count % 5 == 0 do
-                print("fizz")
-            else if count % 3 == 0 do
-                print("buzz")
-            else
-                print(count)
-            count+=1 
+
+        layout Vector2
+            x: s64 
+            y: s64
+
+        do
+            decl thing = push int
+            1+1
         `, 
         context.temp_allocator
     )
@@ -81,24 +78,6 @@ main :: proc() {
     if root == nil {
         return
     }
-}
-
-parse_top_level :: proc(g: ^lex.Godlex) -> ^Link {
-    code := make([dynamic]^Link, g.allocator)
-    t := lex.group_ahead(g,1)
-    for t.kind != .EOF {
-        append(&code, parse_statement(g))
-        if lex.has_error(g) {
-            return nil
-        }
-        t = lex.group_ahead(g,1)
-    }
-
-    root := new(Node(Block),g.allocator)
-    root.kind = .BLOCK
-    root.code = code[:]
-    // just give it EOF so it's obvious if somehow `error` is called on it (shouldnt happen)
-    root.pos = t
 
     when ODIN_DEBUG {
         b := strings.builder_make()
@@ -107,6 +86,4 @@ parse_top_level :: proc(g: ^lex.Godlex) -> ^Link {
         fmt.println(debug)
         delete(debug)
     }
-
-    return wrap_node(root)
 }

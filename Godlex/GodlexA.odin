@@ -128,8 +128,10 @@ KEYWORDS := [?]string {
     "true",
     "false",
     "none",
+    "as",
     "decl",
     "forward",
+    "push",
     "do",
     "if",
     "else",
@@ -138,4 +140,5 @@ KEYWORDS := [?]string {
     "continue",
     "fu",
     "return",
+    "layout",
 }

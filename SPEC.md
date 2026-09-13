@@ -7,10 +7,10 @@ program := (statement [tag] | layout)*
 
 layout
     := "layout" IDENTIFIER NEWLINE
-     | INDENT layout_field+ DEDENT
+       INDENT (layout_field [tag])+ DEDENT
 
 layout_field
-    := IDENTIFIER ":" IDENTIFIER [tag] 
+    := IDENTIFIER ":" IDENTIFIER
 
 statement
     := declaration
@@ -20,7 +20,7 @@ statement
      | expression
 
 declaration
-    := ("decl" | "forward") identifier ["=" expression] [tag]
+    := ("decl" | "forward") identifier ["=" expression]
 
 tag
     := "@" IDENTIFIER
@@ -112,8 +112,8 @@ arguments
     := expression ("," expression)*
 
 block
-    := "do" statement
-     | "do" NEWLINE INDENT statement+ DEDENT
+    := "do" statement [tag]
+     | "do" NEWLINE INDENT (statement [tag])+ DEDENT
 
 while_expression
     := "while" expression expression

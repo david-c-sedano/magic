@@ -8,12 +8,8 @@ import "base:runtime"
 
 Node :: struct($T: typeid) {
     kind: AST_Kind,
-    // UNFORTUNATELY I cannot do spans for errors :(
-    // because the tokenizer can cross `#include` or a macro at any point
-    // so if I wanted to do spans, id have to literally store every token in a `[]lex.Token`
-    // and reconstruct an entire source view, detect preprocessor, and paste in the text
-    // I'll get to it someday, probably
     pos: lex.Token,
+    tag: string,
     using data: T,
 }
 
@@ -57,6 +53,8 @@ AST_Kind :: enum {
         // SPECIAL POSTFIX
         CALL,
         SUBSCRIPT,
+        DEREFERENCE,
+        CAST,
     BIN_EXPR_END,
 
     UNARY_EXPR_BEGIN,
@@ -66,6 +64,7 @@ AST_Kind :: enum {
     UNARY_EXPR_END,
    
     DECL,
+    PUSH,
     RETURN,
     BREAK,
     CONTINUE,
@@ -76,7 +75,8 @@ AST_Kind :: enum {
     IF_ELSE,
     WHILE,
     FUNCTION,
-    ARRAY,
+    LAYOUT_FIELD,
+    LAYOUT,
 }
 
 Leaf :: struct {
@@ -127,6 +127,19 @@ Function :: struct {
     body: ^Link,
 }
 
+Layout_Field :: struct {
+    name,type: string,
+}
+
+Layout :: struct {
+    name: string,
+    fields: []^Link,
+}
+
+Push :: struct {
+    type: string,
+}
+
 // a static table for the node system is needed
 // odin doesnt do it automatically tho D:
 KIND_LOOKUP: map[typeid]struct{ start,end:AST_Kind }
@@ -141,6 +154,7 @@ init_kind_lookup :: proc "contextless" () {
 
     KIND_LOOKUP[Leaf] = { start=.LEAF }
     KIND_LOOKUP[Decl] = { start=.DECL }
+    KIND_LOOKUP[Push] = { start=.PUSH }
     KIND_LOOKUP[Return] = { start=.RETURN }
     KIND_LOOKUP[Break] = { start=.BREAK }
     KIND_LOOKUP[Continue] = { start=.CONTINUE }
@@ -149,6 +163,8 @@ init_kind_lookup :: proc "contextless" () {
     KIND_LOOKUP[If_Else] = { start=.IF_ELSE }
     KIND_LOOKUP[While] = { start=.WHILE }
     KIND_LOOKUP[Function] = { start=.FUNCTION }
+    KIND_LOOKUP[Layout_Field] = { start=.LAYOUT_FIELD }
+    KIND_LOOKUP[Layout] = { start=.LAYOUT }
     // kinds that map to MULTIPLE node types
     KIND_LOOKUP[Bin_Expr] = { .BIN_EXPR_BEGIN, .BIN_EXPR_END }
     KIND_LOOKUP[Unary_Expr] = { .UNARY_EXPR_BEGIN, .UNARY_EXPR_END }
@@ -210,6 +226,12 @@ walk_ast :: proc(node: ^Link, data: rawptr, visit: proc(^Link, rawptr)) {
     if cont := node_cast(Continue, node); cont != nil {
         return
     }
+    if push := node_cast(Push, node); push != nil {
+        return
+    }
+    if field := node_cast(Layout_Field, node); field != nil {
+        return
+    }
 
     if ret := node_cast(Return, node); ret != nil {
         walk_ast(ret.result, data, visit)
@@ -264,6 +286,13 @@ walk_ast :: proc(node: ^Link, data: rawptr, visit: proc(^Link, rawptr)) {
             walk_ast(node, data, visit)
         }
         walk_ast(func.body, data, visit)
+        return
+    }
+
+    if layout := node_cast(Layout, node); layout != nil {
+        for node in layout.fields {
+            walk_ast(node, data, visit)
+        }
         return
     }
 
