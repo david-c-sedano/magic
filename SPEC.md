@@ -4,12 +4,14 @@ This language is designed around a small set of regular syntax. That way the lan
 # FORMAL GRAMMAR
 ```
 program := (statement [tag] | layout)*
- layout
+
+layout
     := "layout" IDENTIFIER NEWLINE
      | INDENT layout_field+ DEDENT
 
 layout_field
     := IDENTIFIER ":" IDENTIFIER [tag] 
+
 statement
     := declaration
      | return_statement
@@ -142,6 +144,7 @@ Almost everything in Magic is an expression. I say almost everything because the
 * Return statement
 * Break statement
 * Continue statement
+
 Syntactically, you can use these statements at the top level, or within a “do” block which will sequence statements together. Blocks evaluate to the last statement in the sequence. Declarations evaluate to the value that was used to initialize (or “none” if no assignment). In the case of “return”, that is illegal outside function bodies. In the case of “break” and “continue”, those are illegal outside of loops, and loops always return “none”. 
 
 Expressions themselves can count as statements as well, and can have side effects. This isn’t Haskell, bruh.
@@ -308,6 +311,13 @@ Layouts can also be inferred when passing pointers as function parameters.
 ## Layout Field Modifiers
 TODO, “using”, “as” and “overlay”. These ideas are plagiarized from Jai/Odin, “overlay” is how unions would be done.
 
+## Function types
+So does Magic have function types? Are functions "first-class citizens?" Not really. This is kinda of TODO right now, but the idea is that:  
+```
+decl myfunc = fu(a,b,c,d) a + b * c / d
+```
+"myfunc" will have type "ptr", but it's layout information will have some "callable" flag set to true. This "function=ptr" idea raises some questions about treating arbitrary arrays/pointers as functions, which is very cool and maybe simplifies doing C interop, though I'd imagine you'd need extra syntax to distinguish instantiating and calling a function from "invoking" it.
+
 # NOTE about “tags”
 I have tags listed in the grammar. Normally, multiple statements/expressions on the same line is not allowed. However after each statement or layout field you can have a “tag”
 ```
@@ -325,8 +335,10 @@ layout thingymabob
 They do not do anything currently. Since Magic is so dirt easy to parse though, I want to leave them in the language and current parser because maybe you can do cool code analysis type stuff with it.
 
 # Push keyword
-The “push” keyword is similar to “new” from over languages. It is parsed as its own expression. It can take either a type or a memory layout, and it allocates space on the stack for it and returns a pointer. For example: 
+The “push” keyword is similar to “new” from over languages. It is parsed as its own expression. It can take either a type or a memory layout, and it allocates space on the stack for it and returns a pointer. For example:
+```
 decl my_vector2 = push Vector2
+```
 “my_vector2” will be of “ptr” type. You can use it just as you would any other “ptr” value with “Vector2” layout. Except the value lives on the stack and it will cease to exist when the function returns. So unfortunately, our quest for better individual allocation syntax continues…. 
 
 # MIXINS
