@@ -256,7 +256,7 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Link {
             leaf.token = token
             return wrap_node(leaf)
 
-        case .MINUS,.BANG,.SQUIGGLY:
+        case .MINUS,.BANG,.SQUIGGLY,.AMPERSAND:
             unary_op := lex.group(g)
             operand := parse_expr(g, MAX_PREC) 
             if lex.has_error(g) {
@@ -265,9 +265,10 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Link {
             // map tokens to unary ops here
             kind: AST_Kind
             #partial switch unary_op.kind {
-            case .MINUS:    kind = .NEGATE
-            case .BANG:     kind = .LOGICAL_NOT
-            case .SQUIGGLY: kind = .BIT_NOT
+            case .MINUS:     kind = .NEGATE
+            case .BANG:      kind = .LOGICAL_NOT
+            case .SQUIGGLY:  kind = .BIT_NOT
+            case .AMPERSAND: kind = .ADDRESS_OF
             }
             unary := new_node(Unary_Expr, token, kind, g.allocator)
             unary.op_token = unary_op
@@ -344,11 +345,15 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Link {
 
     expr_parse: for {
         op_token := lex.group_ahead(g,1)
-        #partial switch op_token.kind {
-        case .EOF:
+        if op_token.kind == .EOF {
             break expr_parse
-
+        }
+        // TODO: this smells. Fix with proper source spans
+        if op_token.start.line > left.pos.start.line {
+            break expr_parse
+        }
         /* POSTFIX */
+        #partial switch op_token.kind {
         case .OPEN_PAREN:
             if MAX_PREC < min_prec do break expr_parse
             params := parse_param_list(g)

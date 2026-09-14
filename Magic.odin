@@ -68,6 +68,7 @@ main :: proc() {
 
         do
             decl thing = push int
+            -thing
             1+1
         `, 
         context.temp_allocator

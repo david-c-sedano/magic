@@ -61,6 +61,7 @@ AST_Kind :: enum {
         NEGATE,
         BIT_NOT,
         LOGICAL_NOT,
+        ADDRESS_OF,
     UNARY_EXPR_END,
    
     DECL,
@@ -140,8 +141,6 @@ Push :: struct {
     type: string,
 }
 
-// a static table for the node system is needed
-// odin doesnt do it automatically tho D:
 KIND_LOOKUP: map[typeid]struct{ start,end:AST_Kind }
 kind_lookup_mem: [9999]u8
 kind_lookup_arena: vmem.Arena
