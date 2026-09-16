@@ -61,15 +61,12 @@ main :: proc() {
     g,_ := lex.make_character_grouper(
         "test", 
         `
-
-        layout Vector2
-            x: s64 
-            y: s64
-
+        #define NUTS 67
+        #define DEEZ 69 + NUTS
         do
             decl thing = push int
-            -thing
             1+1
+            DEEZ - NUTS
         `, 
         context.temp_allocator
     )
@@ -79,10 +76,13 @@ main :: proc() {
     if root == nil {
         return
     }
-
+    roote := node_cast(Block, root)
+    lex.error(g, roote.code[0].span, "testo")
+    lex.flush_messages(g)
+    
     when ODIN_DEBUG {
         b := strings.builder_make()
-        sbprint(wrap_node(root), &b)
+        sbprint(root, &b)
         debug := strings.to_string(b)
         fmt.println(debug)
         delete(debug)

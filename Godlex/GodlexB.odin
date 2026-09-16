@@ -84,6 +84,7 @@ snapshot :: proc(g: ^Godlex) {
         snapshot.prev = file
         include = include.parent
     }
+    append(&g.prev_hist_sizes, len(g.history))
 }
 
 // `restore/commit` will pop an entire axis
@@ -106,6 +107,10 @@ restore :: proc(g: ^Godlex) {
         include = include.parent
     }
     load_rune(g)
+
+    prev_hist_size,ok := pop_safe(&g.prev_hist_sizes)
+    assert(ok)
+    resize(&g.history, prev_hist_size)
 }
 
 commit :: proc(g: ^Godlex) {
@@ -114,6 +119,8 @@ commit :: proc(g: ^Godlex) {
     include := crumb.next
     g.breadcrumbs = crumb.parent
 
+    hist_start := g.prev_hist_sizes[len(g.prev_hist_sizes)-1]
+
     for include != nil {
         file := include
         for file.next != nil {
@@ -121,6 +128,12 @@ commit :: proc(g: ^Godlex) {
         }
         if file.prev != nil {
             target := file.prev
+            // patch tokens in the history so they point to the committed file 
+            for &token in g.history[hist_start:] {
+                if token.file == file {
+                    token.file = target
+                }
+            }
             older := target.prev
             target^ = file^
             target.prev = older
@@ -131,12 +144,15 @@ commit :: proc(g: ^Godlex) {
         }
         include = include.parent
     }
+    pop(&g.prev_hist_sizes)
 }
 
 make_character_grouper :: proc(path: string, data: string, a: runtime.Allocator) -> (^Godlex, ^Lex_File) {
     g := new(Godlex)
     g.allocator = a
     g.messages = make([dynamic]Message, g.allocator)
+    g.history = make([dynamic]Token, g.allocator)
+    g.prev_hist_sizes = make([dynamic]int, g.allocator)
     file := push_lex_file(g)
     file.path = path
     file.data = data
@@ -179,7 +195,7 @@ next_rune :: proc(g: ^Godlex) -> rune {
 	return g.r
 }
 
-skip_whitespace :: proc(g: ^Godlex) {
+skip_whitespace :: proc(g: ^Godlex) -> (newline: bool) {
     file := current_file(g) 
     for file.cursor.offset < len(file.data) {
         switch g.r {
@@ -187,6 +203,7 @@ skip_whitespace :: proc(g: ^Godlex) {
             next_rune(g)
 
         case '\n':
+            newline = true
             next_rune(g)
             file.cursor.line += 1
             file.line_start = file.cursor.offset
@@ -196,6 +213,7 @@ skip_whitespace :: proc(g: ^Godlex) {
             return
         }
     }
+    return
 }
 
 skip_hex_digits :: proc(g: ^Godlex) {
@@ -318,11 +336,12 @@ skip_block_comment :: proc(g: ^Godlex) {
     }
 }
 
-get_token :: proc(g: ^Godlex) -> Token {
+get_token :: proc(g: ^Godlex, newline := false) -> Token {
     file := current_file(g) 
-    skip_whitespace(g)
+    newline := skip_whitespace(g) || newline
 
     token: Token
+    token.newline = newline
     token.file = file
     token.start = file.cursor
     token.kind = .INVALID
@@ -341,11 +360,13 @@ get_token :: proc(g: ^Godlex) -> Token {
         if r1 == '/' {
             next_rune(g)
             skip_past_newline(g)
-            return get_token(g)
+            return get_token(g, true)
         }
         if r1 == '*' {
+            line_b4 := file.cursor.line
             skip_block_comment(g)
-            return get_token(g)
+            crossed := file.cursor.line > line_b4
+            return get_token(g, newline || crossed)
         }
 
     case utf8.RUNE_EOF:
@@ -353,7 +374,7 @@ get_token :: proc(g: ^Godlex) -> Token {
         if file.parent != nil {
             pop_lex_file(g)
             load_rune(g)
-            return get_token(g)
+            return get_token(g, newline)
         }
         token.kind = .EOF
         token.end = token.start
@@ -526,7 +547,7 @@ get_token :: proc(g: ^Godlex) -> Token {
     case .BYTE:
         unescaped, ok := unescape(g, token.text)
         if !ok || len(unescaped) != 1 {
-            error(g, token, "invalid byte literal")
+            bad_token(g, token, "invalid byte literal")
             token.kind = .INVALID
             return token
         }
@@ -542,7 +563,7 @@ get_token :: proc(g: ^Godlex) -> Token {
     case .STR:
         unescaped, ok := unescape(g, token.text)
         if !ok {
-            error(g, token, "unclosed/invalid string")
+            bad_token(g, token, "unclosed/invalid string")
             token.kind = .INVALID
             return token
         }
@@ -624,16 +645,22 @@ unescape :: proc(g: ^Godlex, str: string) -> (string, bool) {
 }
 
 group :: proc(g: ^Godlex, expect := Token_Kind.INVALID) -> Token { 
+    newline := false
+    column := -1
+
     for {
         g.t = get_token(g)
+        newline = newline || g.t.newline
+        if column < 0 || g.t.newline {
+            column = g.t.start.column
+        }
         if g.t.kind == .IDENT {
             name := g.t
             if name.text in g.defines {
-                file := current_file(g)
                 tempfname := fmt.aprintf("MACRO:%s",name.text,allocator=g.allocator)
                 include := do_include(g, tempfname, g.defines[name.text])
                 if include == nil {
-                    error(g, name, "while expanding macro")
+                    bad_token(g, name, "while expanding macro")
                     return Token { kind = .INVALID, start=name.start, end=name.end }
                 }
                 continue
@@ -646,22 +673,22 @@ group :: proc(g: ^Godlex, expect := Token_Kind.INVALID) -> Token {
 
         hash := g.t
         directive := get_token(g)
-        // this is where you can customize/extend the preprocessor if you want
+        /* PREPROCESSOR */
         switch directive.text {
         case "include":
             path := get_token(g)
             if path.kind != .STR {
-                error(g, path, "expected string after `#include`")
+                bad_token(g, path, "expected string after `#include`")
                 return Token { kind = .INVALID, start=hash.start, end=path.end }
             }
             data, err := os.read_entire_file(path.as_str,context.allocator)
             if err != nil {
-                error(g, path, "cannot `#include` file that doesn't exist")
+                bad_token(g, path, "cannot `#include` file that doesn't exist")
                 return Token { kind = .INVALID, start=hash.start, end=path.end }
             }
             include := do_include(g, path.as_str, cast(string) data)
             if include == nil {
-                error(g, path, "while including")
+                bad_token(g, path, "while including")
                 return Token { kind = .INVALID, start=hash.start, end=path.end }
             }
             continue
@@ -669,7 +696,7 @@ group :: proc(g: ^Godlex, expect := Token_Kind.INVALID) -> Token {
         case "define":
             name := get_token(g)
             if name.kind != .IDENT {
-                error(g, name, "expected macro name after `#define`")
+                bad_token(g, name, "expected macro name after `#define`")
                 return Token { kind = .INVALID, start=hash.start, end=name.end }
             }
             file := current_file(g)
@@ -687,7 +714,7 @@ group :: proc(g: ^Godlex, expect := Token_Kind.INVALID) -> Token {
         case "ifdef":
             define := get_token(g)
             if define.kind != .IDENT {
-                error(g, define, "expected macro/symbol name after `#ifdef`")
+                bad_token(g, define, "expected macro/symbol name after `#ifdef`")
                 return Token { kind = .INVALID, start=hash.start, end=define.end }
             }
             if !(define.text in g.defines) {
@@ -698,7 +725,7 @@ group :: proc(g: ^Godlex, expect := Token_Kind.INVALID) -> Token {
         case "ifndef":
             define := get_token(g)
             if define.kind != .IDENT {
-                error(g, define, "expected macro/symbol name after `#ifdef`")
+                bad_token(g, define, "expected macro/symbol name after `#ifdef`")
                 return Token { kind = .INVALID, start=hash.start, end=define.end }
             }
             if define.text in g.defines {
@@ -714,17 +741,18 @@ group :: proc(g: ^Godlex, expect := Token_Kind.INVALID) -> Token {
             continue
 
         case: 
-            error(g, directive, "unknown preprocessor directive")
+            bad_token(g, directive, "unknown preprocessor directive")
             return Token { kind = .INVALID, start=hash.start, end=directive.end }
         }
     }
 
-    if expect != .INVALID {
-        if g.t.kind != expect {
-            wrong := g.t
-            wrong.kind = .INVALID
-            return wrong
-        }
+    g.t.newline = newline
+    g.t.column = column
+    append(&g.history,g.t)
+    if expect != .INVALID && g.t.kind != expect {
+        wrong := g.t
+        wrong.kind = .INVALID
+        return wrong
     }
     return g.t
 }
@@ -810,14 +838,6 @@ group_ahead :: proc(g: ^Godlex, n: int, expect := Token_Kind.INVALID) -> Token {
     return token
 }
 
-// This is useful if you want whitespace to be counted
-peek_no_preproc :: proc(g: ^Godlex) -> Token {
-    snapshot(g)
-    token := get_token(g)
-    restore(g)
-    return token
-}
-
 warning :: proc(g: ^Godlex, msg_text: string, format: ..any) {
     msg: Message
     msg.file = current_file(g)
@@ -825,43 +845,82 @@ warning :: proc(g: ^Godlex, msg_text: string, format: ..any) {
     append(&g.messages, msg)
 }
 
-error :: proc(
-    g: ^Godlex,
-    token: Token,
-    msg_text: string, 
-    format: ..any
-) {
+bad_token :: proc(g: ^Godlex, token: Token, msg_text: string, format: ..any) {
     msg: Message
     msg.fatal = true
     msg.file = token.file 
-    msg.text = fmt.aprintf(msg_text, ..format)
+    msg.text = fmt.aprintf(msg_text, ..format, allocator=g.allocator)
     msg.start,msg.end = token.start,token.end
     g.error_count += 1
     append(&g.messages, msg)
 }
 
+error :: proc(g: ^Godlex, span: [2]int, msg_text: string, format: ..any) {
+    msg: Message
+    msg.fatal = true 
+    msg.file = nil
+    msg.span = span
+    msg.text = fmt.aprintf(msg_text, ..format, allocator=g.allocator)
+    append(&g.messages, msg)
+    g.error_count += 1
+}
+
 flush_messages :: proc(g: ^Godlex) {
     for msg in g.messages {
-        defer delete(msg.text)
-
         if !msg.fatal {
             fmt.printf("[WARNING] %s from `%s`\n", msg.text, msg.file.path)
             continue
         }
+        // if message does not span multiple tokens across many files
+        if msg.file != nil {
+            fmt.printf("[SYNTAX ERROR] %s\n", msg.text)
+            fmt.printf("  --> here from (%d:%d) to (%d:%d) in `%s`\n", 
+                msg.start.line, msg.start.column, msg.end.line, msg.end.column,
+                msg.file.path 
+            )
 
-        fmt.printf("[SYNTAX ERROR] %s\n", msg.text)
-        fmt.printf("  --> here from (%d:%d) to (%d:%d) in `%s`\n", 
-            msg.start.line, msg.start.column, msg.end.line, msg.end.column,
-            msg.file.path 
-        )
-
-        assert(msg.start.line == msg.end.line)
-        assert(msg.start.column <= msg.end.column)
-        fmt.printf("\n\t%s\n", get_line_text(msg.file.data, msg.start.line))
-        underline := caret_line(g, msg.start, msg.end)
-        fmt.printf("\t%s\n", underline)
+            assert(msg.start.line == msg.end.line)
+            assert(msg.start.column <= msg.end.column)
+            fmt.printf("\n\t%s\n", get_line_text(msg.file.data, msg.start.line))
+            underline := caret_line(g, msg.start, msg.end)
+            fmt.printf("\t%s\n", underline)
+            continue
+        }
+        // else print expanded source view
+        fmt.printf("[ERROR] %s\n", msg.text)
+        spans := make(map[^Lex_File][dynamic]Token,g.allocator)
+        for token in g.history[msg.span[0]:msg.span[1]] {
+            if token.file not_in spans {
+                spans[token.file] = make([dynamic]Token,g.allocator)
+            }
+            append(&spans[token.file], token)
+        }
+        for file, span in spans {
+            print_source_view(g, file, span[0].start, span[len(span)-1].end)
+            fmt.println()
+        }
     }
     clear(&g.messages)
+}
+
+print_source_view :: proc(g: ^Godlex, file: ^Lex_File, start,end: Source_Pos) {
+    fmt.printf("  --> from (%d:%d) to (%d:%d) in stream `%s`\n", 
+        start.line, start.column, end.line, end.column,
+        file.path 
+    )
+    b := strings.builder_make(allocator=g.allocator)
+    strings.write_string(&b, "\x1b[31m") //RED
+    for line_num in start.line..=end.line {
+        line := get_line_text(file.data, line_num)
+        strings.write_string(&b, "\t")
+        for c, i in line {
+            column := i+1
+            strings.write_rune(&b, c)
+        }
+        strings.write_byte(&b, '\n')
+    }
+    strings.write_string(&b, "\x1b[0m")
+    fmt.print(strings.to_string(b))
 }
 
 get_line_text :: proc(source: string, line: int) -> string {

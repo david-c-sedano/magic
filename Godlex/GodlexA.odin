@@ -7,6 +7,8 @@ Godlex :: struct {
     r,rnext: rune,
     w: int,
     t: Token,
+    history: [dynamic]Token,
+    prev_hist_sizes: [dynamic]int,
     includes,breadcrumbs: ^Lex_File,
     defines: map[string]string,
     messages: [dynamic]Message,
@@ -28,16 +30,22 @@ Source_Pos :: struct {
 
 Message :: struct {
     fatal: bool,
-    file: ^Lex_File,
     text: string,
+    file: ^Lex_File,
     start, end: Source_Pos,
+    // if `file` is nil, use `span` into `Godlex.history`
+    span: [2]int,
 }
 
 Token :: struct {
     file: ^Lex_File,
-    start, end: Source_Pos,
     text: string,
     kind: Token_Kind,
+    // for diagnostics
+    start,end: Source_Pos,
+    // for proper whitespace-dependant syntax 
+    newline: bool,
+    column: int,
 
     using value: struct #raw_union {
         as_u8: u8,

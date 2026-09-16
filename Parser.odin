@@ -8,9 +8,8 @@ MAX_PREC :: 9999 // for single operand prefix/postfix
 
 parse_top_level :: proc(g: ^lex.Godlex) -> ^Link {
     code := make([dynamic]^Link, g.allocator)
+    span_start := len(g.history)
     t := lex.group_ahead(g,1)
-    next := lex.peek_no_preproc(g)
-    end: lex.Source_Pos
     for t.kind != .EOF {
         if t.text == "layout" {
             layout := parse_layout(g)
@@ -32,49 +31,45 @@ parse_top_level :: proc(g: ^lex.Godlex) -> ^Link {
             return nil
         }
 
-        end = next.end
-        next = lex.peek_no_preproc(g)
-        if next.start.line == end.line {
-            lex.error(g, next, "expected statement to end the current line");
+        t = lex.group_ahead(g,1)
+        if t.kind != .EOF && !t.newline {
+            lex.bad_token(g, t, "expected statement to end the current line");
             lex.flush_messages(g)
             return nil
         }
-
-        t = lex.group_ahead(g,1)
     }
 
     root := new(Node(Block),g.allocator)
     root.kind = .BLOCK
     root.code = code[:]
-    // just give it EOF so it's obvious if somehow `error` is called on it (shouldnt happen)
-    root.pos = t
-
+    root.span = { span_start, len(g.history) }
     return wrap_node(root)
 }
 
 parse_layout :: proc(g: ^lex.Godlex) -> ^Node(Layout) {
+    span_start := len(g.history)
     layout_keyw := lex.group(g)
     name := lex.group(g, .IDENT)
     if name.kind == .INVALID {
-        lex.error(g, name, "expected an identifier after `layout`")
+        lex.bad_token(g, name, "expected an identifier after `layout`")
         return nil
     }
 
     fields := make([dynamic]^Link, g.allocator)
-    next := lex.peek_no_preproc(g)
-    if next.start.line == name.start.line {
-        lex.error(g, name, "expected newline after name of `layout`")
+    next := lex.group_ahead(g,1)
+    if !next.newline {
+        lex.bad_token(g, name, "expected newline after name of `layout`")
         return nil
     }
 
-    column := next.start.column
+    column := next.column
     prev := next.end
     for next.kind != .EOF {
-        if next.start.column < column {
+        if next.column < column {
             break
         }
-        if next.start.column > column {
-            lex.error(g, next, "unexpected indentation in `layout`")
+        if next.column > column {
+            lex.bad_token(g, next, "unexpected indentation in `layout`")
             return nil
         }
 
@@ -89,38 +84,41 @@ parse_layout :: proc(g: ^lex.Godlex) -> ^Node(Layout) {
         }
 
         prev = next.end
-        next = lex.peek_no_preproc(g)
-        if next.start.line == prev.line {
-            lex.error(g, next, "expected layout field to end the current line")
+        next = lex.group_ahead(g,1)
+        if !next.newline {
+            lex.bad_token(g, next, "expected layout field to end the current line")
             return nil
         }
     }
-    layout := new_node(Layout, layout_keyw, alloc=g.allocator)
+    layout := new_node(Layout, alloc=g.allocator)
     layout.name = name.text
     layout.fields = fields[:]
+    layout.span = { span_start, len(g.history) } 
     return layout
 }
 
 parse_layout_field :: proc(g: ^lex.Godlex) -> ^Node(Layout_Field) {
+    span_start := len(g.history)
     name := lex.group(g, .IDENT)
     if name.kind == .INVALID {
-        lex.error(g, name, "expected an identifier to denote layout field")
+        lex.bad_token(g, name, "expected an identifier to denote layout field")
         return nil
     }
     colon := lex.group(g, .COLON)
     if colon.kind == .INVALID {
-        lex.error(g, colon, "expected colon to separate layout field name from type")
+        lex.bad_token(g, colon, "expected colon to separate layout field name from type")
         return nil
     }
     type := lex.group(g, .IDENT)
     if type.kind == .INVALID {
-        lex.error(g, type, "expected an identifier to denote layout field type")
+        lex.bad_token(g, type, "expected an identifier to denote layout field type")
         return nil
     }
 
-    field := new_node(Layout_Field, name, alloc=g.allocator)
+    field := new_node(Layout_Field, alloc=g.allocator)
     field.name = name.text
     field.type = type.text
+    field.span = { span_start, len(g.history) }
     return field
 }
 
@@ -136,27 +134,29 @@ parse_statement :: proc(g: ^lex.Godlex) -> ^Link {
             return wrap_node(decl)
 
         case "return":
+            span_start := len(g.history)
             lex.group(g) 
-            ret := new_node(Return, next, alloc=g.allocator)
-            mayb_expr := lex.peek_no_preproc(g)
-            if mayb_expr.start.line == next.start.line {
+            ret := new_node(Return, alloc=g.allocator)
+            mayb_expr := lex.group_ahead(g,1)
+            if !mayb_expr.newline {
                 result := parse_expr(g) 
                 if lex.has_error(g) {
                     return nil
                 }
                 ret.result = result
             }
+            ret.span = { span_start, len(g.history) }
             return wrap_node(ret)
 
         case "break":
             lex.group(g)
-            brk := new_node(Break, next, alloc=g.allocator)
-            brk.pos = next
+            brk := new_node(Break, alloc=g.allocator)
+            brk.span = { len(g.history)-1, len(g.history) }
             return wrap_node(brk)
         case "continue":
             lex.group(g)
-            cont := new_node(Continue, next, alloc=g.allocator)
-            cont.pos = next
+            cont := new_node(Continue, alloc=g.allocator)
+            cont.span = { len(g.history)-1, len(g.history) }
             return wrap_node(cont)
         }
     }
@@ -169,39 +169,44 @@ parse_statement :: proc(g: ^lex.Godlex) -> ^Link {
 }
 
 parse_decl :: proc(g: ^lex.Godlex) -> ^Node(Decl) {
+    span_start := len(g.history)
     decl_keyw := lex.group(g)
 
     name := lex.group(g, .IDENT)
     if name.kind == .INVALID {
-        lex.error(g, decl_keyw, "expected some form of `decl <name> = <expr>`")
+        lex.bad_token(g, decl_keyw, "expected some form of `decl <name> = <expr>`")
         return nil
     }
 
-    decl := new_node(Decl, decl_keyw, alloc=g.allocator)
+    decl := new_node(Decl, alloc=g.allocator)
     decl.name = name
     decl.forward = decl_keyw.text == "forward"
-
     eq := lex.group_ahead(g, 1, .EQUALS)
+    if eq.newline {
+        lex.bad_token(g, eq, "expected `=` in `decl` to remain on same line")
+        return nil
+    }
     if eq.kind != .INVALID {
         decl.rhs = parse_expr(g)
         if lex.has_error(g) {
             return nil
         }
     }
+    decl.span = { span_start, len(g.history) }
     return decl
 }
 
 maybe_parse_tag :: proc(g: ^lex.Godlex, node: ^Link) {
     lex.snapshot(g)
     at_symbol := lex.group(g, .AT)
-    if at_symbol.kind == .INVALID {
+    if at_symbol.kind == .INVALID || at_symbol.newline {
         lex.restore(g)
         return
     }
     tag := lex.group(g, .IDENT)
-    if tag.kind == .INVALID {
+    if tag.kind == .INVALID || tag.newline {
         lex.restore(g)
-        lex.error(g, tag, "expected an identifier in tag after `@`")
+        lex.bad_token(g, tag, "expected an identifier for tag immediately after `@`")
         return
     }
     node.tag = tag.text
@@ -252,11 +257,13 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Link {
         #partial switch token.kind {
         case .BYTE,.INT,.FLOAT,.STR,.IDENT:
             lex.group(g)
-            leaf := new_node(Leaf, token, alloc=g.allocator)
+            leaf := new_node(Leaf, alloc=g.allocator)
             leaf.token = token
+            leaf.span = { len(g.history)-1, len(g.history) }
             return wrap_node(leaf)
 
         case .MINUS,.BANG,.SQUIGGLY,.AMPERSAND:
+            span_start := len(g.history)
             unary_op := lex.group(g)
             operand := parse_expr(g, MAX_PREC) 
             if lex.has_error(g) {
@@ -270,12 +277,14 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Link {
             case .SQUIGGLY:  kind = .BIT_NOT
             case .AMPERSAND: kind = .ADDRESS_OF
             }
-            unary := new_node(Unary_Expr, token, kind, g.allocator)
+            unary := new_node(Unary_Expr, kind, g.allocator)
             unary.op_token = unary_op
             unary.operand = operand
+            unary.span = { span_start, len(g.history) }
             return wrap_node(unary)
 
         case .OPEN_PAREN:
+            span_start := len(g.history)
             lex.group(g)
             expr := parse_expr(g)
             if lex.has_error(g) {
@@ -283,25 +292,29 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Link {
             }
             cparen := lex.group_ahead(g, 1, .CLOSE_PAREN)
             if cparen.kind == .INVALID {
-                lex.error(g, cparen, "expected closing parentheses")
+                lex.bad_token(g, cparen, "expected closing parentheses")
                 return nil
             }
+            expr.span = { span_start, len(g.history) }
             return expr
 
         case .KEYWORD:
             switch token.text {
             case "true","false","none":
                 lex.group(g)
-                leaf := new_node(Leaf, token, alloc=g.allocator)
+                leaf := new_node(Leaf, alloc=g.allocator)
                 leaf.token = token
+                leaf.span = { len(g.history)-1, len(g.history) }
                 return wrap_node(leaf)
 
             case "do":
+                span_start := len(g.history)
                 lex.group(g)
                 block := parse_block(g, token)
                 if lex.has_error(g) {
                     return nil
                 }
+                block.span = { span_start, len(g.history) }
                 return wrap_node(block)
 
             case "while":
@@ -334,10 +347,11 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Link {
             }
         }
 
-        lex.error(g, token, "unexpected token while parsing expression")
+        lex.bad_token(g, token, "unexpected token while parsing expression")
         return nil
     }
 
+    span_start := len(g.history)
     left := parse_operand(g)
     if lex.has_error(g) {
         return nil
@@ -348,8 +362,7 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Link {
         if op_token.kind == .EOF {
             break expr_parse
         }
-        // TODO: this smells. Fix with proper source spans
-        if op_token.start.line > left.pos.start.line {
+        if op_token.newline {
             break expr_parse
         }
         /* POSTFIX */
@@ -360,10 +373,11 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Link {
             if lex.has_error(g) {
                 return nil
             }
-            call := new_node(Bin_Expr, op_token, .CALL, g.allocator)
+            call := new_node(Bin_Expr, .CALL, g.allocator)
             call.op_token = op_token
             call.left = left
             call.right = wrap_node(params)
+            call.span = { span_start, len(g.history) }
             left = wrap_node(call)
             continue
 
@@ -376,13 +390,14 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Link {
             }
             cbracket := lex.group(g, .CLOSE_BRACKET)
             if cbracket.kind == .INVALID {
-                lex.error(g, cbracket, "expected closing `]`")
+                lex.bad_token(g, cbracket, "expected closing `]`")
                 return nil
             }
-            subscript := new_node(Bin_Expr, op_token, .SUBSCRIPT, g.allocator)
+            subscript := new_node(Bin_Expr, .SUBSCRIPT, g.allocator)
             subscript.op_token = op_token
             subscript.left = left
             subscript.right = index
+            subscript.span = { span_start, len(g.history) }
             left = wrap_node(subscript)
             continue
 
@@ -391,15 +406,16 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Link {
             lex.group(g)
             field := lex.group(g, .IDENT)
             if field.kind == .INVALID {
-                lex.error(g, field, "expected an identifier after `.`")
+                lex.bad_token(g, field, "expected an identifier after `.`")
                 return nil
             }
-            leaf := new_node(Leaf, field, alloc=g.allocator)
+            leaf := new_node(Leaf, alloc=g.allocator)
             leaf.token = field
-            dereference := new_node(Bin_Expr, op_token, .DEREFERENCE, g.allocator)
+            dereference := new_node(Bin_Expr, .DEREFERENCE, g.allocator)
             dereference.op_token = op_token
             dereference.left = left
             dereference.right = wrap_node(leaf)
+            dereference.span = { span_start, len(g.history) }
             left = wrap_node(dereference)
             continue
 
@@ -412,15 +428,17 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Link {
             lex.group(g)
             type := lex.group(g, .IDENT)
             if type.kind == .INVALID {
-                lex.error(g, type, "expected an identifier after `as`")
+                lex.bad_token(g, type, "expected an identifier after `as`")
                 return nil
             }
-            leaf := new_node(Leaf, type, alloc=g.allocator)
+            leaf := new_node(Leaf, alloc=g.allocator)
             leaf.token = type
-            as := new_node(Bin_Expr, op_token, .CAST, g.allocator)
+            leaf.span = { len(g.history)-1, len(g.history) }
+            as := new_node(Bin_Expr, .CAST, g.allocator)
             as.op_token = op_token
             as.left = left
             as.right = wrap_node(leaf)
+            as.span = { span_start, len(g.history) }
             left = wrap_node(as)
             continue
         }
@@ -442,19 +460,22 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Link {
                 return nil
             }
 
-            expr := new_node(Bin_Expr, op_token, op, g.allocator)
+            expr := new_node(Bin_Expr, op, g.allocator)
             expr.op_token = op_token
             expr.left = wrap_node(left)
             expr.right = right
+            expr.span = { span_start, len(g.history) }
             left = wrap_node(expr)
         } else {
             break
         }
     }
+    left.span = { span_start, len(g.history) }
     return left
 }
 
 parse_param_list :: proc(g: ^lex.Godlex) -> ^Node(Param_List) {
+    span_start := len(g.history)
     oparen := lex.group(g)
     params := make([dynamic]^Link, g.allocator)
 
@@ -480,21 +501,23 @@ parse_param_list :: proc(g: ^lex.Godlex) -> ^Node(Param_List) {
         if next.kind == .COMMA {
             lex.group(g)
         } else if next.kind != .CLOSE_PAREN {
-            lex.error(g,next, "expected comma `,` or closing `)`")
+            lex.bad_token(g,next, "expected comma `,` or closing `)`")
             return nil
         }
     }
     lex.group(g)
-    list := new_node(Param_List, oparen, alloc=g.allocator)
+    list := new_node(Param_List, alloc=g.allocator)
     list.params = params[:]
+    list.span = { span_start, len(g.history) }
     return list 
 }
 
 parse_block :: proc(g: ^lex.Godlex, block_start_token: lex.Token) -> ^Node(Block) {
-    block := new_node(Block, block_start_token, alloc=g.allocator)
+    // span needs taken care of in callers because `else` gets special treatment
+    block := new_node(Block, alloc=g.allocator)
     code := make([dynamic]^Link, g.allocator)
    
-    first_token := lex.peek_no_preproc(g)
+    first_token := lex.group_ahead(g,1)
     first := parse_statement(g)
     if lex.has_error(g) {
         return nil
@@ -505,23 +528,23 @@ parse_block :: proc(g: ^lex.Godlex, block_start_token: lex.Token) -> ^Node(Block
         return nil
     }
     // allow for single statement 1 line `do` to make `if` expressions more convenient
-    if first_token.start.line == block_start_token.start.line {
+    if !first_token.newline {
         block.code = code[:]
         return block
     }
 
-    column := first_token.start.column
-    next := lex.peek_no_preproc(g)
-    end := first_token.end
-    if next.start.line == end.line {
-        lex.error(g, next, "expected statement to end the current line")
+    column := first_token.column
+    next := lex.group_ahead(g,1)
+    if !next.newline {
+        lex.bad_token(g, next, "expected statement to end the current line")
+        return nil
     }
     for next.kind != .EOF {
-        if next.start.column < column {
+        if next.column < column {
             break
         }
-        if next.start.column > column {
-            lex.error(g, next, "unexpected indentation in `do` notation")
+        if next.column > column {
+            lex.bad_token(g, next, "unexpected indentation in `do` notation")
             return nil
         }
 
@@ -535,10 +558,9 @@ parse_block :: proc(g: ^lex.Godlex, block_start_token: lex.Token) -> ^Node(Block
             return nil
         }
 
-        end = next.end
-        next = lex.peek_no_preproc(g)
-        if next.start.line == end.line {
-            lex.error(g, next, "expected statement to end the current line")
+        next = lex.group_ahead(g,1)
+        if !next.newline {
+            lex.bad_token(g, next, "expected statement to end the current line")
             return nil
         }
     }
@@ -547,6 +569,7 @@ parse_block :: proc(g: ^lex.Godlex, block_start_token: lex.Token) -> ^Node(Block
 }
 
 parse_while :: proc(g: ^lex.Godlex) -> ^Node(While) {
+    span_start := len(g.history)
     while_keyw := lex.group(g)
     cond := parse_expr(g) 
     if lex.has_error(g) {
@@ -557,13 +580,15 @@ parse_while :: proc(g: ^lex.Godlex) -> ^Node(While) {
         return nil
     }
     // lmaooo I get to use `while` as an identifier!!
-    while := new_node(While, while_keyw, alloc=g.allocator)
+    while := new_node(While, alloc=g.allocator)
     while.cond = cond
     while.body = body
+    while.span = { span_start, len(g.history) } 
     return while
 }
 
 parse_if_else :: proc(g: ^lex.Godlex) -> ^Node(If_Else) {
+    span_start := len(g.history)
     if_keyw := lex.group(g)
     cond := parse_expr(g)
     if lex.has_error(g) {
@@ -580,9 +605,12 @@ parse_if_else :: proc(g: ^lex.Godlex) -> ^Node(If_Else) {
     if else_keyw.kind == .KEYWORD && else_keyw.text == "else" {
         lex.commit(g)
         // make it so that newline after `else` automatically starts a new block
-        next := lex.peek_no_preproc(g)
-        if next.start.line > else_keyw.start.line {
-            else_body = wrap_node(parse_block(g, else_keyw))
+        next := lex.group_ahead(g,1)
+        if next.newline {
+            span_start := len(g.history)-1 // the "else" token we just went thru
+            body := parse_block(g, else_keyw)
+            body.span = { span_start, len(g.history) } 
+            else_body = wrap_node(body)
         } else {
             else_body = parse_expr(g)
         }
@@ -593,18 +621,20 @@ parse_if_else :: proc(g: ^lex.Godlex) -> ^Node(If_Else) {
         lex.restore(g)
     }
 
-    if_else := new_node(If_Else, if_keyw, alloc=g.allocator)
+    if_else := new_node(If_Else, alloc=g.allocator)
     if_else.cond = cond
     if_else.if_body = if_body
     if_else.else_body = else_body
+    if_else.span = { span_start, len(g.history) }
     return if_else
 }
 
 parse_func :: proc(g: ^lex.Godlex) -> ^Node(Function) {
+    span_start := len(g.history)
     fu_keyw := lex.group(g)
     oparen := lex.group(g, .OPEN_PAREN)
     if oparen.kind == .INVALID {
-        lex.error(g, oparen, "expected param list after `fu`")
+        lex.bad_token(g, oparen, "expected param list after `fu`")
         return nil
     }
 
@@ -626,7 +656,7 @@ parse_func :: proc(g: ^lex.Godlex) -> ^Node(Function) {
         if next.kind == .COMMA {
             lex.group(g)
         } else if next.kind != .CLOSE_PAREN {
-            lex.error(g,next, "expected comma `,` or closing `)`")
+            lex.bad_token(g,next, "expected comma `,` or closing `)`")
             return nil
         }
     }
@@ -637,20 +667,23 @@ parse_func :: proc(g: ^lex.Godlex) -> ^Node(Function) {
         return nil
     }
 
-    func := new_node(Function, fu_keyw, alloc=g.allocator)
+    func := new_node(Function, alloc=g.allocator)
     func.params = params[:]
     func.body = body
+    func.span = { span_start, len(g.history) }
     return func 
 }
 
 parse_push :: proc(g: ^lex.Godlex) -> ^Node(Push) {
+    span_start := len(g.history)
     push_keyw := lex.group(g, .KEYWORD)
     type := lex.group(g, .IDENT)
     if type.kind == .INVALID {
-        lex.error(g, type, "expected a type/layout after after `push`")
+        lex.bad_token(g, type, "expected a type/layout after after `push`")
         return nil
     }
-    push := new_node(Push, push_keyw, alloc=g.allocator)
+    push := new_node(Push, alloc=g.allocator)
     push.type = type.text
+    push.span = { span_start, len(g.history) }
     return push
 }

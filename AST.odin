@@ -8,7 +8,7 @@ import "base:runtime"
 
 Node :: struct($T: typeid) {
     kind: AST_Kind,
-    pos: lex.Token,
+    span: [2]int, // into lex.Godlex.history
     tag: string,
     using data: T,
 }
@@ -191,9 +191,8 @@ node_cast :: proc($T: typeid, node: ^Link) -> ^Node(T) {
     }
 }
 
-new_node :: proc($T: typeid, pos: lex.Token, specify:=AST_Kind.INVALID, alloc:=context.allocator) -> ^Node(T) {
+new_node :: proc($T: typeid, specify:=AST_Kind.INVALID, alloc:=context.allocator) -> ^Node(T) {
     node := new(Node(T),alloc)
-    node.pos = pos
     when T == Bin_Expr || T == Unary_Expr {
         assert(specify!=.INVALID)
         node.kind = specify
@@ -201,7 +200,6 @@ new_node :: proc($T: typeid, pos: lex.Token, specify:=AST_Kind.INVALID, alloc:=c
         kind := KIND_LOOKUP[T].start
         node.kind = kind
     }
-
     return node
 }
 
