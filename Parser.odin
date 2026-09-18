@@ -182,7 +182,7 @@ parse_decl :: proc(g: ^lex.Godlex) -> ^Node(Decl) {
     decl.name = name
     decl.forward = decl_keyw.text == "forward"
     eq := lex.group_ahead(g, 1, .EQUALS)
-    if eq.newline {
+    if eq.kind != .INVALID && eq.newline {
         lex.bad_token(g, eq, "expected `=` in `decl` to remain on same line")
         return nil
     }

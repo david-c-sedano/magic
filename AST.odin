@@ -10,7 +10,14 @@ Node :: struct($T: typeid) {
     kind: AST_Kind,
     span: [2]int, // into lex.Godlex.history
     tag: string,
+    using annotation: Annotation,
     using data: T,
+}
+
+Annotation :: struct {
+    constraints: Unknown,
+    entity: ^Entity,
+    mode: Addressing_Mode,
 }
 
 Link :: Node(struct{})
@@ -207,7 +214,7 @@ wrap_node :: proc(node: ^Node($T)) -> ^Link {
     return cast(^Link) node
 }
 
-walk_ast :: proc(node: ^Link, data: rawptr, visit: proc(^Link, rawptr)) {
+pre_order_walk :: proc(node: ^Link, data: rawptr, visit: proc(^Link, rawptr)) {
     if node == nil {
         return
     }
@@ -231,68 +238,171 @@ walk_ast :: proc(node: ^Link, data: rawptr, visit: proc(^Link, rawptr)) {
     }
 
     if ret := node_cast(Return, node); ret != nil {
-        walk_ast(ret.result, data, visit)
+        pre_order_walk(ret.result, data, visit)
         return
     }
 
     if decl := node_cast(Decl, node); decl != nil {
-        walk_ast(decl.rhs, data, visit)
+        pre_order_walk(decl.rhs, data, visit)
         return
     }
 
     if bin_expr := node_cast(Bin_Expr, node); bin_expr != nil {
-        walk_ast(bin_expr.left, data, visit)
-        walk_ast(bin_expr.right, data, visit)
+        pre_order_walk(bin_expr.left, data, visit)
+        pre_order_walk(bin_expr.right, data, visit)
         return
     }
 
     if unary_expr := node_cast(Unary_Expr, node); unary_expr != nil {
-        walk_ast(unary_expr.operand, data, visit)
+        pre_order_walk(unary_expr.operand, data, visit)
         return
     }
 
     if list := node_cast(Param_List, node); list != nil {
         for node in list.params {
-            walk_ast(node, data, visit)
+            pre_order_walk(node, data, visit)
         }
         return
     }
 
     if block := node_cast(Block, node); block != nil {
         for node in block.code {
-            walk_ast(node, data, visit)
+            pre_order_walk(node, data, visit)
         }
         return
     }
 
     if if_else := node_cast(If_Else, node); if_else != nil {
-        walk_ast(if_else.cond, data, visit)
-        walk_ast(if_else.if_body, data, visit)
-        walk_ast(if_else.else_body, data, visit)
+        pre_order_walk(if_else.cond, data, visit)
+        pre_order_walk(if_else.if_body, data, visit)
+        pre_order_walk(if_else.else_body, data, visit)
         return
     }   
 
     if while := node_cast(While, node); while != nil {
-        walk_ast(while.cond, data, visit)
-        walk_ast(while.body, data, visit)
+        pre_order_walk(while.cond, data, visit)
+        pre_order_walk(while.body, data, visit)
         return
     }
 
     if func := node_cast(Function, node); func != nil {
         for node in func.params  {
-            walk_ast(node, data, visit)
+            pre_order_walk(node, data, visit)
         }
-        walk_ast(func.body, data, visit)
+        pre_order_walk(func.body, data, visit)
         return
     }
 
     if layout := node_cast(Layout, node); layout != nil {
         for node in layout.fields {
-            walk_ast(node, data, visit)
+            pre_order_walk(node, data, visit)
         }
         return
     }
 
     fmt.printf("%v\n", node.kind)
-    assert(false, "unknown AST_Kind in `walk_ast`")
+    assert(false, "unknown AST_Kind in `pre_order_walk`")
+}
+
+post_order_walk :: proc(node: ^Link, data: rawptr, visit: proc(^Link, rawptr)) {
+    if node == nil {
+        return
+    }
+
+    if leaf := node_cast(Leaf, node); leaf != nil {
+        visit(node, data)
+        return
+    }
+    if brk := node_cast(Break, node); brk != nil {
+        visit(node, data)
+        return
+    }
+    if cont := node_cast(Continue, node); cont != nil {
+        visit(node, data)
+        return
+    }
+    if push := node_cast(Push, node); push != nil {
+        visit(node, data)
+        return
+    }
+    if field := node_cast(Layout_Field, node); field != nil {
+        visit(node, data)
+        return
+    }
+
+    if ret := node_cast(Return, node); ret != nil {
+        post_order_walk(ret.result, data, visit)
+        visit(node, data)
+        return
+    }
+
+    if decl := node_cast(Decl, node); decl != nil {
+        post_order_walk(decl.rhs, data, visit)
+        visit(node, data)
+        return
+    }
+
+    if bin_expr := node_cast(Bin_Expr, node); bin_expr != nil {
+        post_order_walk(bin_expr.left, data, visit)
+        post_order_walk(bin_expr.right, data, visit)
+        visit(node, data)
+        return
+    }
+
+    if unary_expr := node_cast(Unary_Expr, node); unary_expr != nil {
+        post_order_walk(unary_expr.operand, data, visit)
+        visit(node, data)
+        return
+    }
+
+    if list := node_cast(Param_List, node); list != nil {
+        for node in list.params {
+            post_order_walk(node, data, visit)
+        }
+        visit(node, data)
+        return
+    }
+
+    if block := node_cast(Block, node); block != nil {
+        for node in block.code {
+            post_order_walk(node, data, visit)
+        }
+        visit(node, data)
+        return
+    }
+
+    if if_else := node_cast(If_Else, node); if_else != nil {
+        post_order_walk(if_else.cond, data, visit)
+        post_order_walk(if_else.if_body, data, visit)
+        post_order_walk(if_else.else_body, data, visit)
+        visit(node, data)
+        return
+    }   
+
+    if while := node_cast(While, node); while != nil {
+        post_order_walk(while.cond, data, visit)
+        post_order_walk(while.body, data, visit)
+        visit(node, data)
+        return
+    }
+
+    if func := node_cast(Function, node); func != nil {
+        for node in func.params  {
+            post_order_walk(node, data, visit)
+        }
+        post_order_walk(func.body, data, visit)
+        visit(node, data)
+        return
+    }
+
+    if layout := node_cast(Layout, node); layout != nil {
+        for node in layout.fields {
+            post_order_walk(node, data, visit)
+        }
+        visit(node, data)
+        return
+    }
+
+    fmt.printf("%v\n", node.kind)
+    assert(false, "unknown AST_Kind in `post_order_walk`")
 }

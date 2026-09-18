@@ -63,6 +63,7 @@ main :: proc() {
         `
         #define NUTS 67
         #define DEEZ 69 + NUTS
+            
         do
             decl thing = push int
             1+1

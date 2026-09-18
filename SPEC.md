@@ -215,9 +215,14 @@ This is basically the source of inference for everything, other than the default
     ptr, int -> ptr
     ptr, ptr -> int
 
+* /:
+    numeric -> numeric
+
 %:
     int, int -> int
     byte, byte -> byte
+    int, byte -> int
+    byte, int -> int
 
 & | ^ << >>:
     byte, byte -> byte
