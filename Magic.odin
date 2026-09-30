@@ -6,6 +6,7 @@ import lex "Godlex"
 import "core:fmt"
 import "core:mem"
 import "core:strings"
+import "core:os"
 
 import win32 "core:sys/windows"
 
@@ -37,55 +38,42 @@ main :: proc() {
         win32.SetConsoleOutputCP(.UTF8)
     }
    
-    /*
-    g,_ := lex.make_character_grouper(
-        "test", 
-        `
-        // count fibonaccis
-        #define N 92 // 93 is too big for i64
-        decl count = 0
-        decl first = 0
-        decl second = 1
-        decl next
-        while count < N do
-            next = first + second
-            first = second
-            second = next
-            count+=1
-        first
-        `, 
-        context.temp_allocator
-    )
-    */
-    
-    g,_ := lex.make_character_grouper(
-        "test", 
-        `
-        #define NUTS 67
-        #define DEEZ 69 + NUTS
-            
-        do
-            decl thing = push int
-            1+1
-            DEEZ - NUTS
-        `, 
-        context.temp_allocator
-    )
-    defer lex.delete_character_grouper(g)
+    buf := [4000]u8{}
+    for {
+        total_read, err := os.read(os.stdin, buf[:])
+        input := strings.trim_space(cast(string) buf[:total_read])
+        if input == "q" {
+            break 
+        }
+        if input == "" {
+            continue
+        }
+        g,_ := lex.make_character_grouper("REPL", input, context.temp_allocator)
+        defer lex.delete_character_grouper(g)
 
-    root := parse_top_level(g)
-    if root == nil {
-        return
-    }
-    roote := node_cast(Block, root)
-    lex.error(g, roote.code[0].span, "testo")
-    lex.flush_messages(g)
-    
-    when ODIN_DEBUG {
-        b := strings.builder_make()
-        sbprint(root, &b)
-        debug := strings.to_string(b)
-        fmt.println(debug)
-        delete(debug)
+        root := parse_top_level(g)
+        if lex.has_error(g) {
+            continue
+        }
+
+        c: Checker
+        init_checker(&c, g)
+        seed(&c, root)
+        if c.error_count > 0 {
+            lex.flush_messages(g)
+            continue
+        }
+
+        when ODIN_DEBUG {
+            b := strings.builder_make()
+            sbprint(root, &b)
+            debug := strings.to_string(b)
+            fmt.println(debug)
+            delete(debug)
+
+            result := check_node(&c, root)
+            fmt.println(result.mode)
+            fmt.println(result.constraints)
+        }
     }
 }

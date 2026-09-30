@@ -14,9 +14,9 @@ Node :: struct($T: typeid) {
     using data: T,
 }
 
+// Parser does not touch this!!
 Annotation :: struct {
     constraints: Unknown,
-    entity: ^Entity,
     mode: Addressing_Mode,
 }
 
