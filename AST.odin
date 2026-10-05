@@ -18,6 +18,7 @@ Node :: struct($T: typeid) {
 Annotation :: struct {
     constraints: Unknown,
     mode: Addressing_Mode,
+    scope: ^Scope, // for blocks
 }
 
 Link :: Node(struct{})
@@ -94,7 +95,11 @@ Leaf :: struct {
 Decl :: struct {
     forward: bool,
     name: lex.Token,
-    rhs: ^Link,
+    // this must be an actual bug with the odin compiler
+    // it will make `rhs` an invalid type about 25% of the time... 
+    // if I use `^Link` in this ONE STRUCT FIELD!!!
+    // it's not deterministic at all
+    rhs: ^Node(struct{}),
 }
 
 Return :: struct {

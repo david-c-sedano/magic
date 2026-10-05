@@ -868,7 +868,7 @@ error :: proc(g: ^Godlex, span: [2]int, msg_text: string, format: ..any) {
 flush_messages :: proc(g: ^Godlex) {
     for msg in g.messages {
         if !msg.fatal {
-            fmt.printf("[WARNING] %s from `%s`\n", msg.text, msg.file.path)
+            fmt.printf("[WARNING] %s from `%s`\n\n", msg.text, msg.file.path)
             continue
         }
         // if message does not span multiple tokens across many files

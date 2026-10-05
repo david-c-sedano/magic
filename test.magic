@@ -1,0 +1,16 @@
+
+do
+    decl three = fifteen
+    three
+
+    one
+    forward one = one
+
+    decl two = 2
+    two
+
+one
+fifteen
+
+decl x = x + 1
+forward ee

@@ -5,10 +5,12 @@ import lex "Godlex"
 import "core:fmt"
 
 Addressing_Mode :: enum {
+    UNKNOWN,
     INVALID,
     NO_VALUE,
     RVALUE,
-    LVALUE,
+    LVALUE, // addressable, assignable
+    CONST,  // addressable, NOT assignable
 }
 
 Operand :: struct {
@@ -27,8 +29,6 @@ Entity_Kind :: enum {
 Entity :: struct {
     kind: Entity_Kind,
     scope: ^Scope,
-    span: [2]int,
-    name: string,
     constraints: Unknown,
     decl: ^Node(Decl),
     //TODO: instance: Instance (function instantiating at call site)
@@ -46,6 +46,7 @@ Checker :: struct {
     mode: Addressing_Mode,
     current: ^Entity,
     changed: bool,
+    passes: int,
     //TODO: layouts: map[string]Layout_Info
 }
 
@@ -294,18 +295,60 @@ push_scope :: proc(c: ^Checker) {
         parent = c.scope
     }
     c.scope = new(Scope,c.allocator)
+    c.scope.symbols = make(map[string]^Entity, c.allocator)
     c.scope.parent = parent 
 }
 
-pop_scope :: proc(c: ^Checker) {
-    if c.scope != nil {
-        c.scope = c.scope.parent
+// is shadowing REALLY that simple??
+lookup :: proc(scope: ^Scope, ident: ^Node(Leaf)) -> ^Entity {
+    assert(ident.token.kind == .IDENT)
+    it := scope
+    for it != nil {
+        if entity, ok := it.symbols[ident.token.text]; ok {
+            // imagine needing to special case this
+            // because forward declarations fall into place too well
+            if entity.decl.forward || entity.decl.span[0] < ident.span[0] {
+                return entity
+            }
+        }
+        it = it.parent
     }
+    return nil
 }
 
-operand_of :: proc(node: ^Link, mode: Addressing_Mode) -> Operand {
+local :: proc(scope: ^Scope, name: string) -> ^Entity {
+    if entity, ok := scope.symbols[name]; ok {
+        return entity
+    }
+    return nil
+}
+
+global :: proc(scope: ^Scope, name: string) -> ^Entity {
+    it := scope
+    for it != nil {
+        if it.parent == nil {
+            break
+        }
+        it = it.parent
+    }
+    if entity, ok := it.symbols[name]; ok {
+        return entity
+    }
+    return nil
+}
+
+declare :: proc(scope: ^Scope, name: string, entity: ^Entity) -> ^Entity {
+    if entity, exists := scope.symbols[name]; exists {
+        return entity
+    }
+    scope.symbols[name] = entity
+    return nil
+}
+
+operand_of :: proc(node: ^Node($T), mode: Addressing_Mode) -> Operand {
+    node.mode = mode
     operand: Operand
-    operand.expr = node
+    operand.expr = wrap_node(node)
     operand.constraints = node.constraints
     operand.mode = mode
     return operand
@@ -399,13 +442,18 @@ infer :: proc {
 
 // I dont think it's needed to check `lex.has_error` schizophrenically 
 // just keep going and accumulate errors
-bad_node :: proc(c: ^Checker, node: ^Link, errmsg: string, format: ..any) {
+bad_node :: proc(c: ^Checker, node: ^Node($T), errmsg: string, format: ..any) {
     lex.error(c.g, node.span, errmsg, ..format);
 }
 
-seed :: proc(c: ^Checker, root: ^Link) {
+warn :: proc(c: ^Checker, errmsg: string, format: ..any) {
+    lex.warning(c.g, errmsg, ..format)
+}
 
-    visit :: proc(node: ^Link, data: rawptr) {
+seed :: proc(c: ^Checker, root: ^Link) {
+    // literal-value default types, layout info and casts
+    // and layout info for functions and `push` 
+    assign_starting_constraints :: proc(node: ^Link, data: rawptr) {
         c := cast(^Checker) data
         
         if leaf := node_cast(Leaf, node); leaf != nil {
@@ -465,96 +513,185 @@ seed :: proc(c: ^Checker, root: ^Link) {
             return
         }
 
-        // stuff that makes no value, unless it's `decl` or `return` with expression
-        if field := node_cast(Layout_Field, node); field != nil {
-            field.mode = .NO_VALUE
-            return
-        }
-        if layout := node_cast(Layout, node); layout != nil {
-            layout.mode = .NO_VALUE
-            return
-        }
-        if brk := node_cast(Break, node); brk != nil {
-            brk.mode = .NO_VALUE
-            return
-        }
-        if cont := node_cast(Continue, node); cont != nil {
-            cont.mode = .NO_VALUE
-            return
-        }
-        if list := node_cast(Param_List, node); list != nil {
-            // broader `CALL` expression is what gets the type
-            // this is like a template instantiation
-            list.mode = .NO_VALUE
-            return
-        }
-        if ret := node_cast(Return, node); ret != nil {
-            // I wonder if "break-like" return is a good way to frame it?
-            if ret.result == nil {
-                ret.mode = .NO_VALUE
-            }
-            return
-        }
-        if decl := node_cast(Decl, node); decl != nil {
-            // I think I said that `decl` without init is `none`
-            // but for now I'm not gonna add the constraint, maybe will change spec
-            if decl.rhs == nil {
-                decl.mode = .NO_VALUE
-            }
-            return
-        }
-
         node.constraints = Any
     }
 
-    post_order_walk(root, cast(rawptr) c, visit)
+    collect_forwards :: proc(node: ^Link, data: rawptr) {
+        c := cast(^Checker) data
+        decl := node_cast(Decl, node)
+        if decl == nil || !decl.forward {
+            return
+        }
+
+        if decl.rhs == nil {
+            decl.constraints = Any
+        } else {
+            decl.constraints = decl.rhs.constraints
+        }
+        entity := new(Entity, c.allocator)
+        // the idea of a `const var` kind of pisses me off because its an oxymoron
+        // but even in the case of functions, its still a variable that evalutes to a function
+        entity.kind = .VARIABLE
+        entity.scope = c.scope
+        entity.constraints = decl.constraints
+        entity.decl = decl
+        if exists := declare(c.scope, decl.name.text, entity); exists != nil {
+            bad_node(c, node, "this is a redeclaration")
+            bad_node(c, exists.decl, "original is here")
+            c.error_count -= 1 // just count it as 1 man
+        }
+    }
+
+    assert(root.kind == .BLOCK)
+    root.scope = c.scope
+    post_order_walk(root, cast(rawptr) c, assign_starting_constraints)
+    pre_order_walk(root, cast(rawptr) c, collect_forwards)
 }
 
 infer_node :: proc(c: ^Checker, node: ^Link) -> Operand {
+    if node.mode == .INVALID {
+        return operand_of(node, .INVALID) 
+    }
 
     if leaf := node_cast(Leaf, node); leaf != nil {
-        return operand_of(node, leaf.mode) // seeded 
+        if leaf.mode == .NO_VALUE {
+            return operand_of(leaf, .NO_VALUE)
+        }
+        if leaf.token.kind == .IDENT {
+            entity := lookup(c.scope, leaf)
+            if entity == nil {
+                bad_node(c, leaf, "undeclared identifier `%s`", leaf.token.text)
+                return operand_of(leaf, .INVALID) 
+            }
+
+            common := leaf.constraints & entity.constraints
+            if common != leaf.constraints || common != entity.constraints {
+                c.changed = true
+            }
+            leaf.constraints = common
+            entity.constraints = common
+            if entity.decl.forward {
+                leaf.mode = .CONST
+            } else {
+                leaf.mode = .LVALUE
+            }
+        }
+        return operand_of(leaf, leaf.mode)
     }
 
     if bin_expr := node_cast(Bin_Expr, node); bin_expr != nil {
         lhs := infer_node(c, bin_expr.left)
+        if lhs.mode == .INVALID {
+            return operand_of(bin_expr, .INVALID) 
+        }
         rhs := infer_node(c, bin_expr.right)
+        if rhs.mode == .INVALID {
+            return operand_of(bin_expr, .INVALID) 
+        }
         if len(RULES[bin_expr.kind]) != 0 {
             if infer(bin_expr) {
                 c.changed = true 
             }
         }
-        return operand_of(node, .RVALUE)  //TODO: Will have to check `lhs` for subscript 
+        return operand_of(bin_expr, .RVALUE) //TODO: Will have to check `lhs` for subscript
     }
 
     if unary_expr := node_cast(Unary_Expr, node); unary_expr != nil {
         unary_operand := infer_node(c, unary_expr.operand)
+        if unary_operand.mode == .INVALID {
+            return operand_of(unary_expr, .INVALID) 
+        }
         if len(RULES[unary_expr.kind]) != 0 {
             if infer(unary_expr) {
                 c.changed = true
             }
         }
-        return operand_of(node, .RVALUE) //TODO: Will have to check for addr-of 
+        return operand_of(unary_expr, .RVALUE) //TODO: Will have to check for addr-of 
     }
 
+    // NOTE: empty blocks are rejected by the parser
+    // only way its possible is in case of empty file, which is handled!!
     if block := node_cast(Block, node); block != nil {
-        // NOTE: empty blocks are rejected by the parser
-        // only way its possible is in case of empty file, which is handled!!
+        old_scope := c.scope
+        if block.scope == nil {
+            push_scope(c)
+            block.scope = c.scope
+        }
+        c.scope = block.scope
         result: Operand
         for stmnt in block.code {
             result = infer_node(c, stmnt)
+            if result.mode == .INVALID {
+                block.mode = .INVALID
+                // dont return yet! it's prolly better to accumulate errors 
+            }
         }
+        c.scope = old_scope
+        if block.mode  == .INVALID {
+            return operand_of(block, .INVALID)
+        }
+
         common := block.constraints & result.constraints
         if common != block.constraints || common != result.constraints {
             c.changed = true
         }
         block.constraints = common
-        result.expr.constraints = common
-        operand: Operand
-        operand.expr = node
-        operand.constraints = block.constraints
-        operand.mode = result.mode
-        return operand
+        if result.expr != nil {
+            result.expr.constraints = common
+        }
+        return operand_of(block, result.mode == .NO_VALUE ? .NO_VALUE : .RVALUE)
+    }
+
+    if decl := node_cast(Decl, node); decl != nil {
+        if decl.rhs != nil {
+            // infer node first then declare
+            // keep in mind smthn like `forward one = one + one` is allowed
+            // because the `one` is already declared before being checked here
+            // which is literally the entire point of `forward`
+            rhs := infer_node(c, decl.rhs)
+            if rhs.mode == .INVALID {
+                warn(c, "declaration of `%s` failed!", decl.name.text)
+                return operand_of(decl, .INVALID)
+            }
+        }
+        entity: ^Entity
+        if !decl.forward {
+            entity = local(c.scope, decl.name.text)
+            if entity == nil {
+                entity = new(Entity, c.allocator)
+                entity.kind = .VARIABLE
+                entity.scope = c.scope
+                entity.constraints = decl.constraints
+                entity.decl = decl
+                declare(c.scope, decl.name.text, entity)
+            } else if decl != entity.decl {
+                bad_node(c, decl, "this is a redeclaration")
+                bad_node(c, entity.decl, "original is here")
+                c.error_count -= 1
+                return operand_of(decl, .INVALID)
+            }
+        } else {
+            entity = global(c.scope, decl.name.text)
+            assert(entity != nil) // `collect_forward` means this CANNOT fail 
+            // redeclarations of forwards already checked as well
+        }
+        
+        if decl.rhs == nil {
+            return operand_of(decl, .NO_VALUE)
+        }
+        common := decl.constraints & decl.rhs.constraints & entity.constraints
+        if common != decl.constraints     || 
+           common != decl.rhs.constraints || 
+           common != entity.constraints {
+            c.changed = true
+        }
+        // general rule: decl.constraints == decl.rhs.constraints == entity.constraints
+        decl.constraints = common
+        decl.rhs.constraints = common
+        entity.constraints = common
+        // honestly with how smooth this `mode` is working out for me
+        // maybe I will just make all statements be `NO_VALUE` feels less edge-casey
+        return operand_of(decl, .NO_VALUE) 
     }
 
     fmt.println(node.kind)
@@ -569,6 +706,7 @@ check_node :: proc(c: ^Checker, node: ^Link) -> Operand {
     for {
         c.changed = false
         operand = infer_node(c, node)
+        c.passes += 1
         if !c.changed {
             break
         }

@@ -7,6 +7,7 @@ import "core:fmt"
 import "core:mem"
 import "core:strings"
 import "core:os"
+import "core:flags"
 
 import win32 "core:sys/windows"
 
@@ -37,43 +38,55 @@ main :: proc() {
     when ODIN_OS == .Windows {
         win32.SetConsoleOutputCP(.UTF8)
     }
-   
-    buf := [4000]u8{}
-    for {
-        total_read, err := os.read(os.stdin, buf[:])
-        input := strings.trim_space(cast(string) buf[:total_read])
-        if input == "q" {
-            break 
-        }
-        if input == "" {
-            continue
-        }
-        g,_ := lex.make_character_grouper("REPL", input, context.temp_allocator)
-        defer lex.delete_character_grouper(g)
 
-        root := parse_top_level(g)
-        if lex.has_error(g) {
-            continue
-        }
+    Options :: struct {
+        file: ^os.File `args:"pos=0,required,file=r" usage:"Input File."`,
+        one_at_a_time: bool `usage:"Enabling accessibility by NOT forcing programmers to buy a vertical monitor in order to read all the ****ing error messages"`,
+    }
+    opts: Options
+    flags.parse_or_exit(&opts, os.args, .Odin)
+ 
+    info, stat_err := os.fstat(opts.file, context.temp_allocator)
+    if stat_err != nil {
+        fmt.println("bad file?")
+        return
+    }
+    data, succ := os.read_entire_file(opts.file, context.temp_allocator)
 
-        c: Checker
-        init_checker(&c, g)
-        seed(&c, root)
-        if c.error_count > 0 {
-            lex.flush_messages(g)
-            continue
-        }
+    g,_ := lex.make_character_grouper(info.name, cast(string) data, context.temp_allocator)
+    defer lex.delete_character_grouper(g)
+    root := parse_top_level(g)
+    if lex.has_error(g) {
+        return
+    }
 
-        when ODIN_DEBUG {
-            b := strings.builder_make()
-            sbprint(root, &b)
-            debug := strings.to_string(b)
-            fmt.println(debug)
-            delete(debug)
+    c: Checker
+    init_checker(&c, g)
+    seed(&c, root) 
+    if c.error_count > 0 {
+        lex.flush_messages(g)
+        fmt.printf("[MAGIC] failed to seed!\n")
+        return
+    }
 
-            result := check_node(&c, root)
-            fmt.println(result.mode)
-            fmt.println(result.constraints)
-        }
+    result := check_node(&c, root)
+
+    when ODIN_DEBUG {
+        b := strings.builder_make()
+        sbprint(root, &b)
+        debug := strings.to_string(b)
+        fmt.println(debug)
+        delete(debug)
+    }
+
+
+    fmt.println(result.mode)
+    fmt.println(result.constraints)
+    fmt.println()
+
+    fmt.printf("[MAGIC] finished in %d inference passes!!\n\n", c.passes)
+
+    if c.error_count > 0 {
+        lex.flush_messages(g)
     }
 }
