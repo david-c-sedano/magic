@@ -404,13 +404,13 @@ infer_unary :: proc(expr: ^Node(Unary_Expr)) -> bool {
     return changed
 }
 
-infer_bin :: proc(expr: ^Node(Bin_Expr)) -> bool {
+infer_bin_as :: proc(expr: ^Node(Bin_Expr), kind: AST_Kind) -> bool {
     lhs := expr.left.constraints
     rhs := expr.right.constraints
     result := expr.constraints
     possible_lhs,possible_rhs,possible_result: Unknown
     matched := false
-    for rule in RULES[expr.kind] {
+    for rule in RULES[kind] {
         switch bin_rule in rule {
         case Unary_Type_Rule: // skip
         case Bin_Type_Rule:
@@ -436,6 +436,10 @@ infer_bin :: proc(expr: ^Node(Bin_Expr)) -> bool {
     expr.right.constraints = new_rhs
     expr.constraints = new_result
     return changed 
+}
+
+infer_bin :: proc(expr: ^Node(Bin_Expr)) -> bool {
+    return infer_bin_as(expr, expr.kind)
 }
 
 infer :: proc {
@@ -587,6 +591,10 @@ infer_node :: proc(c: ^Checker, node: ^Link) -> Operand {
     }
 
     if bin_expr := node_cast(Bin_Expr, node); bin_expr != nil {
+        if is_assign_op(bin_expr.kind) != .INVALID {
+            return take_care_of_assignment(c, bin_expr)
+        }
+
         lhs := infer_node(c, bin_expr.left)
         if lhs.mode == .INVALID {
             return operand_of(bin_expr, .INVALID) 
@@ -619,7 +627,7 @@ infer_node :: proc(c: ^Checker, node: ^Link) -> Operand {
             }
         }
         if card(unary_expr.constraints) == 0 {
-            // TODO: improve this errmsg
+            //TODO: improve this errmsg
             bad_node(c, node, "type of expression is a contradiction")
             return operand_of(unary_expr, .INVALID) 
         }
@@ -713,6 +721,54 @@ infer_node :: proc(c: ^Checker, node: ^Link) -> Operand {
     fmt.println(node.kind)
     assert(false, "unmatched node kind in `check_node`")
     return {}
+}
+
+take_care_of_assignment :: proc(c: ^Checker, expr: ^Node(Bin_Expr)) -> Operand {
+    lhs := infer_node(c, expr.left)
+    if lhs.mode == .INVALID {
+        return operand_of(expr, .INVALID) 
+    }
+    if lhs.mode == .CONST {
+        bad_node(c, expr.left, "cannot assign to constant (or symbols declared via `forward`)")
+        return operand_of(expr, .INVALID) 
+    }
+    if lhs.mode != .LVALUE {
+        bad_node(c, expr.left, "this is not a valid lvalue in assignment")
+        return operand_of(expr, .INVALID) 
+    }
+    rhs := infer_node(c, expr.right)
+    if rhs.mode == .INVALID {
+        return operand_of(expr, .INVALID) 
+    }
+
+    if expr.kind == .ASSIGN {
+        common := lhs.constraints & rhs.constraints & expr.constraints
+        if common != lhs.constraints ||
+           common != rhs.constraints ||
+           common != expr.constraints {
+            c.changed = true
+        }
+        lhs.expr.constraints = common
+        rhs.expr.constraints = common
+        expr.constraints = common
+    } else {
+        // result must be storable back into lhs
+        common := lhs.constraints & expr.constraints
+        if common != lhs.constraints || common != expr.constraints {
+            c.changed = true
+        }
+        lhs.expr.constraints = common
+        expr.constraints = common
+        if infer_bin_as(expr, is_assign_op(expr.kind)) {
+            c.changed = true
+        }
+    }
+    if card(expr.constraints) == 0 {
+        //TODO: improve this errmsg
+        bad_node(c, expr, "invalid types for assignment")
+        return operand_of(expr, .INVALID)
+    }
+    return operand_of(expr, .RVALUE)
 }
 
 // difference between `check_node` and `infer_node`...

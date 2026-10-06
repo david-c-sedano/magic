@@ -1,8 +1,9 @@
 
-do
-    decl abunch_ofstuff = 13
-    1 + abunch_ofstuff
+decl one = 1.0
+one += 1.0
+one += 1
+two = 1
+1 = two
+three = 3
 
-decl one
-decl two
-one + two
+forward three

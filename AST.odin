@@ -413,6 +413,22 @@ post_order_walk :: proc(node: ^Link, data: rawptr, visit: proc(^Link, rawptr)) {
     assert(false, "unknown AST_Kind in `post_order_walk`")
 }
 
+is_assign_op :: proc(kind: AST_Kind) -> AST_Kind {
+    #partial switch kind {
+    case .ASSIGN:             return .ASSIGN // w/e
+    case .ADD_ASSIGN:         return .ADD
+    case .SUB_ASSIGN:         return .SUB 
+    case .MUL_ASSIGN:         return .MUL 
+    case .DIV_ASSIGN:         return .DIV 
+    case .BIT_AND_ASSIGN:     return .BIT_AND 
+    case .BIT_OR_ASSIGN:      return .BIT_OR
+    case .BIT_XOR_ASSIGN:     return .BIT_XOR
+    case .SHIFT_LEFT_ASSIGN:  return .SHIFT_LEFT
+    case .SHIFT_RIGHT_ASSIGN: return .SHIFT_RIGHT
+    }
+    return .INVALID
+}
+
 node_annotation_string :: proc(constraints: Unknown, mode: Addressing_Mode, allocator := context.allocator) -> string {
     context.allocator = allocator
     b := strings.builder_make()
