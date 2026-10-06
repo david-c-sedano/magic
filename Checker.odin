@@ -115,6 +115,9 @@ RULES := #partial [AST_Kind][]Type_Rule {
         Bin_Type_Rule { Ptr, Int, Ptr },
         Bin_Type_Rule { Int, Ptr, Ptr },
         Bin_Type_Rule { Ptr, Ptr, Ptr },
+
+        Unary_Type_Rule { Int, Int },
+        Unary_Type_Rule { Float, Float },
     },
     .MUL = {
         Bin_Type_Rule { Byte, Byte, Int },
@@ -564,12 +567,16 @@ infer_node :: proc(c: ^Checker, node: ^Link) -> Operand {
                 return operand_of(leaf, .INVALID) 
             }
 
-            common := leaf.constraints & entity.constraints
-            if common != leaf.constraints || common != entity.constraints {
+            // allow facts to propagate to the declaration as well
+            common := leaf.constraints & entity.constraints & entity.decl.constraints
+            if common != leaf.constraints   || 
+               common != entity.constraints ||
+               common != entity.decl.constraints {
                 c.changed = true
             }
             leaf.constraints = common
             entity.constraints = common
+            entity.decl.constraints = common
             if entity.decl.forward {
                 leaf.mode = .CONST
             } else {
@@ -593,6 +600,11 @@ infer_node :: proc(c: ^Checker, node: ^Link) -> Operand {
                 c.changed = true 
             }
         }
+        if card(bin_expr.constraints) == 0 {
+            // TODO: improve this errmsg
+            bad_node(c, node, "type of expression is a contradiction")
+            return operand_of(bin_expr, .INVALID) 
+        }
         return operand_of(bin_expr, .RVALUE) //TODO: Will have to check `lhs` for subscript
     }
 
@@ -605,6 +617,11 @@ infer_node :: proc(c: ^Checker, node: ^Link) -> Operand {
             if infer(unary_expr) {
                 c.changed = true
             }
+        }
+        if card(unary_expr.constraints) == 0 {
+            // TODO: improve this errmsg
+            bad_node(c, node, "type of expression is a contradiction")
+            return operand_of(unary_expr, .INVALID) 
         }
         return operand_of(unary_expr, .RVALUE) //TODO: Will have to check for addr-of 
     }
@@ -685,7 +702,6 @@ infer_node :: proc(c: ^Checker, node: ^Link) -> Operand {
            common != entity.constraints {
             c.changed = true
         }
-        // general rule: decl.constraints == decl.rhs.constraints == entity.constraints
         decl.constraints = common
         decl.rhs.constraints = common
         entity.constraints = common
@@ -712,4 +728,29 @@ check_node :: proc(c: ^Checker, node: ^Link) -> Operand {
         }
     }
     return operand
+}
+
+mark_invalid_types :: proc(c: ^Checker, root: ^Link) {
+    visit :: proc(node: ^Link, data: rawptr) {
+        c := cast(^Checker) data
+        if node.mode == .INVALID {
+            return
+        }
+        unknown := card(node.constraints) > 1
+        supposed_to_produce_value := node.mode != .NO_VALUE || node.kind == .DECL
+        // the `node.kind == .DECL` kind of an edge case, I want this for messaging
+        if unknown && supposed_to_produce_value {
+            bad_node(c, node, "cannot resolve type between %s", 
+                node_annotation_string(node.constraints, node.mode, c.allocator)
+            )
+        }
+    }
+
+    root := node_cast(Block, root)
+    assert(root != nil)
+    // DO NOT print the entire toplevel for *every error*
+    for node in root.code {
+        // go pre-order so messages are not in weird order
+        pre_order_walk(node, cast(rawptr) c, visit) 
+    }
 }

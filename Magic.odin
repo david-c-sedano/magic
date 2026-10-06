@@ -79,14 +79,19 @@ main :: proc() {
         delete(debug)
     }
 
-
-    fmt.println(result.mode)
-    fmt.println(result.constraints)
-    fmt.println()
-
-    fmt.printf("[MAGIC] finished in %d inference passes!!\n\n", c.passes)
-
+    fmt.printf("[MAGIC] finished in %d inference passes!!\n", c.passes)
     if c.error_count > 0 {
         lex.flush_messages(g)
+        return
     }
+
+    fmt.println("generating feedback...")
+    fmt.println()
+
+    mark_invalid_types(&c, root)
+    if c.error_count > 0 {
+        lex.flush_messages(g)
+        return
+    }
+    fmt.println("[MAGIC] we good, fam")
 }

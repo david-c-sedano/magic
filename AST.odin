@@ -5,6 +5,7 @@ import lex "Godlex"
 import vmem "core:mem/virtual"
 import "core:fmt"
 import "base:runtime"
+import "core:strings"
 
 Node :: struct($T: typeid) {
     kind: AST_Kind,
@@ -410,4 +411,20 @@ post_order_walk :: proc(node: ^Link, data: rawptr, visit: proc(^Link, rawptr)) {
 
     fmt.printf("%v\n", node.kind)
     assert(false, "unknown AST_Kind in `post_order_walk`")
+}
+
+node_annotation_string :: proc(constraints: Unknown, mode: Addressing_Mode, allocator := context.allocator) -> string {
+    context.allocator = allocator
+    b := strings.builder_make()
+    strings.write_string(&b, "{ ")
+    if .BOOL in constraints do strings.write_string(&b, "Bool, ");
+    if .BYTE in constraints do strings.write_string(&b, "Byte, ") 
+    if .INT in constraints do strings.write_string(&b, "Int, ") 
+    if .FLOAT in constraints do strings.write_string(&b, "Float, ") 
+    if .PTR in constraints do strings.write_string(&b, "Ptr, ") 
+    if .NONE in constraints do strings.write_string(&b, "None, ") 
+    when ODIN_DEBUG {
+        fmt.sbprintf(&b, "} <-- %s", mode)
+    }
+    return strings.to_string(b)
 }

@@ -1,16 +1,8 @@
 
 do
-    decl three = fifteen
-    three
+    decl abunch_ofstuff = 13
+    1 + abunch_ofstuff
 
-    one
-    forward one = one
-
-    decl two = 2
-    two
-
-one
-fifteen
-
-decl x = x + 1
-forward ee
+decl one
+decl two
+one + two
