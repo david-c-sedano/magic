@@ -4,7 +4,7 @@ package magic
 import "core:strings"
 import "core:fmt"
 
-sbprint :: proc(node: ^Link, b: ^strings.Builder, prefix := "") {
+sbprint :: proc(node: ^Node(Wrapped), b: ^strings.Builder, prefix := "") {
     
     if leaf := node_cast(Leaf, node); leaf != nil {
         fmt.sbprintf(b, "[%v %s]\n", leaf.token.kind, leaf.token.text)

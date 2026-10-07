@@ -23,8 +23,6 @@ Annotation :: struct {
     instance: ^Node(Function), // for calls, copied, distinctly annotated
 }
 
-Link :: Node(struct{})
-
 AST_Kind :: enum {
     INVALID,
     EOF,
@@ -90,6 +88,8 @@ AST_Kind :: enum {
     LAYOUT,
 }
 
+Wrapped :: struct{} 
+
 Leaf :: struct {
     token: lex.Token
 }
@@ -97,45 +97,45 @@ Leaf :: struct {
 Decl :: struct {
     forward: bool,
     name: lex.Token,
-    rhs: ^Node(struct{}),
+    rhs: ^Node(Wrapped),
 }
 
 Return :: struct {
-    result: ^Link
+    result: ^Node(Wrapped)
 }
 
-Break :: struct{}
-Continue :: struct{}
+Break :: distinct struct{} 
+Continue :: distinct struct{} 
 
 Bin_Expr :: struct {
     op_token: lex.Token,
-    left,right: ^Link,
+    left,right: ^Node(Wrapped),
 }
 
 Unary_Expr :: struct {
     op_token: lex.Token,
-    operand: ^Link, 
+    operand: ^Node(Wrapped), 
 }
 
 Param_List :: struct {
-    params: []^Link,
+    params: []^Node(Wrapped),
 }
 
 Block :: struct {
-    code: []^Link,
+    code: []^Node(Wrapped),
 }
 
 If_Else :: struct {
-    cond,if_body,else_body: ^Link,
+    cond,if_body,else_body: ^Node(Wrapped),
 }
 
 While :: struct {
-    cond,body: ^Link,
+    cond,body: ^Node(Wrapped),
 }
 
 Function :: struct {
-    params: []^Link,
-    body: ^Link,
+    params: []^Node(Wrapped),
+    body: ^Node(Wrapped),
 }
 
 Layout_Field :: struct {
@@ -144,7 +144,7 @@ Layout_Field :: struct {
 
 Layout :: struct {
     name: string,
-    fields: []^Link,
+    fields: []^Node(Wrapped),
 }
 
 Push :: struct {
@@ -179,7 +179,7 @@ init_kind_lookup :: proc "contextless" () {
     KIND_LOOKUP[Unary_Expr] = { .UNARY_EXPR_BEGIN, .UNARY_EXPR_END }
 }
 
-node_cast :: proc($T: typeid, node: ^Link) -> ^Node(T) {
+node_cast :: proc($T: typeid, node: ^Node(Wrapped)) -> ^Node(T) {
     if node == nil {
         return nil
     }
@@ -213,11 +213,11 @@ new_node :: proc($T: typeid, specify:=AST_Kind.INVALID, alloc:=context.allocator
     return node
 }
 
-wrap_node :: proc(node: ^Node($T)) -> ^Link {
-    return cast(^Link) node
+wrap_node :: proc(node: ^Node($T)) -> ^Node(Wrapped) {
+    return cast(^Node(Wrapped)) node
 }
 
-pre_order_walk :: proc(node: ^Link, data: rawptr, visit: proc(^Link, rawptr)) {
+pre_order_walk :: proc(node: ^Node(Wrapped), data: rawptr, visit: proc(^Node(Wrapped), rawptr)) {
     if node == nil {
         return
     }
@@ -307,7 +307,7 @@ pre_order_walk :: proc(node: ^Link, data: rawptr, visit: proc(^Link, rawptr)) {
     assert(false, "unknown AST_Kind in `pre_order_walk`")
 }
 
-post_order_walk :: proc(node: ^Link, data: rawptr, visit: proc(^Link, rawptr)) {
+post_order_walk :: proc(node: ^Node(Wrapped), data: rawptr, visit: proc(^Node(Wrapped), rawptr)) {
     if node == nil {
         return
     }

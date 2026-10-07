@@ -6,8 +6,8 @@ import "core:fmt"
 
 MAX_PREC :: 9999 // for single operand prefix/postfix
 
-parse_top_level :: proc(g: ^lex.Godlex) -> ^Link {
-    code := make([dynamic]^Link, g.allocator)
+parse_top_level :: proc(g: ^lex.Godlex) -> ^Node(Wrapped) {
+    code := make([dynamic]^Node(Wrapped), g.allocator)
     span_start := len(g.history)
     t := lex.group_ahead(g,1)
     for t.kind != .EOF {
@@ -55,7 +55,7 @@ parse_layout :: proc(g: ^lex.Godlex) -> ^Node(Layout) {
         return nil
     }
 
-    fields := make([dynamic]^Link, g.allocator)
+    fields := make([dynamic]^Node(Wrapped), g.allocator)
     next := lex.group_ahead(g,1)
     if !next.newline {
         lex.bad_token(g, name, "expected newline after name of `layout`")
@@ -122,7 +122,7 @@ parse_layout_field :: proc(g: ^lex.Godlex) -> ^Node(Layout_Field) {
     return field
 }
 
-parse_statement :: proc(g: ^lex.Godlex) -> ^Link {
+parse_statement :: proc(g: ^lex.Godlex) -> ^Node(Wrapped) {
     next := lex.group_ahead(g,1)
     if next.kind == .KEYWORD {
         switch next.text {
@@ -196,7 +196,7 @@ parse_decl :: proc(g: ^lex.Godlex) -> ^Node(Decl) {
     return decl
 }
 
-maybe_parse_tag :: proc(g: ^lex.Godlex, node: ^Link) {
+maybe_parse_tag :: proc(g: ^lex.Godlex, node: ^Node(Wrapped)) {
     lex.snapshot(g)
     at_symbol := lex.group(g, .AT)
     if at_symbol.kind == .INVALID || at_symbol.newline {
@@ -249,9 +249,9 @@ prec_level :: proc(op: lex.Token) -> (AST_Kind, int, /* right binding */ bool) {
 }
 
 // Go Left Sometimes Parsing Technology (R)(TM)(C)
-parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Link {
+parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Node(Wrapped) {
     
-    parse_operand :: proc(g: ^lex.Godlex)  -> ^Link {
+    parse_operand :: proc(g: ^lex.Godlex)  -> ^Node(Wrapped) {
         token := lex.group_ahead(g,1)
 
         #partial switch token.kind {
@@ -450,7 +450,7 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Link {
             }
             lex.group(g)
 
-            right: ^Link
+            right: ^Node(Wrapped)
             if right_binding {
                 right = parse_expr(g, prec)
             } else {
@@ -477,7 +477,7 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Link {
 parse_param_list :: proc(g: ^lex.Godlex) -> ^Node(Param_List) {
     span_start := len(g.history)
     oparen := lex.group(g)
-    params := make([dynamic]^Link, g.allocator)
+    params := make([dynamic]^Node(Wrapped), g.allocator)
 
     for {
         next := lex.group_ahead(g,1)
@@ -515,7 +515,7 @@ parse_param_list :: proc(g: ^lex.Godlex) -> ^Node(Param_List) {
 parse_block :: proc(g: ^lex.Godlex, block_start_token: lex.Token) -> ^Node(Block) {
     // span needs taken care of in callers because `else` gets special treatment
     block := new_node(Block, alloc=g.allocator)
-    code := make([dynamic]^Link, g.allocator)
+    code := make([dynamic]^Node(Wrapped), g.allocator)
    
     first_token := lex.group_ahead(g,1)
     first := parse_statement(g)
@@ -599,7 +599,7 @@ parse_if_else :: proc(g: ^lex.Godlex) -> ^Node(If_Else) {
         return nil
     }
 
-    else_body: ^Link
+    else_body: ^Node(Wrapped)
     lex.snapshot(g)
     else_keyw := lex.group(g) 
     if else_keyw.kind == .KEYWORD && else_keyw.text == "else" {
@@ -638,7 +638,7 @@ parse_func :: proc(g: ^lex.Godlex) -> ^Node(Function) {
         return nil
     }
 
-    params := make([dynamic]^Link, g.allocator)
+    params := make([dynamic]^Node(Wrapped), g.allocator)
     next := lex.group_ahead(g,1)
     for {
         next := lex.group_ahead(g,1)

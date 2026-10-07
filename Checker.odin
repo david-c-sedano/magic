@@ -14,7 +14,7 @@ Addressing_Mode :: enum {
 }
 
 Operand :: struct {
-    expr: ^Link,
+    expr: ^Node(Wrapped),
     constraints: Unknown,
     mode: Addressing_Mode,
 }
@@ -446,10 +446,10 @@ warn :: proc(c: ^Checker, errmsg: string, format: ..any) {
     lex.warning(c.g, errmsg, ..format)
 }
 
-seed :: proc(c: ^Checker, root: ^Link) {
+seed :: proc(c: ^Checker, root: ^Node(Wrapped)) {
     // literal-value default types, layout info and casts
     // and layout info for functions and `push` 
-    assign_starting_constraints :: proc(node: ^Link, data: rawptr) {
+    assign_starting_constraints :: proc(node: ^Node(Wrapped), data: rawptr) {
         c := cast(^Checker) data
         
         if leaf := node_cast(Leaf, node); leaf != nil {
@@ -509,7 +509,7 @@ seed :: proc(c: ^Checker, root: ^Link) {
         node.constraints = Any
     }
 
-    collect_forwards :: proc(node: ^Link, data: rawptr) {
+    collect_forwards :: proc(node: ^Node(Wrapped), data: rawptr) {
         c := cast(^Checker) data
         decl := node_cast(Decl, node)
         if decl == nil || !decl.forward {
@@ -538,7 +538,7 @@ seed :: proc(c: ^Checker, root: ^Link) {
     pre_order_walk(root, cast(rawptr) c, collect_forwards)
 }
 
-infer_node :: proc(c: ^Checker, node: ^Link) -> Operand {
+infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
     if node.mode == .INVALID {
         return operand_of(node, .INVALID) 
     }
@@ -799,7 +799,7 @@ take_care_of_assignment :: proc(c: ^Checker, expr: ^Node(Bin_Expr)) -> Operand {
 
 // difference between `check_node` and `infer_node`...
 // is that `check_node` repeatedly bashes it's head into the wall
-check_node :: proc(c: ^Checker, node: ^Link) -> Operand {
+check_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
     operand: Operand
     for {
         c.changed = false
@@ -812,8 +812,8 @@ check_node :: proc(c: ^Checker, node: ^Link) -> Operand {
     return operand
 }
 
-mark_invalid_types :: proc(c: ^Checker, root: ^Link) {
-    visit :: proc(node: ^Link, data: rawptr) {
+mark_invalid_types :: proc(c: ^Checker, root: ^Node(Wrapped)) {
+    visit :: proc(node: ^Node(Wrapped), data: rawptr) {
         c := cast(^Checker) data
         if node.mode == .INVALID {
             return
