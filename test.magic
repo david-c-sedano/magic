@@ -7,3 +7,10 @@ two = 1
 three = 3
 
 forward three
+
+&two
+&one
+decl five = &one
+&five
+&69
+&three

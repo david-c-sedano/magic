@@ -477,7 +477,6 @@ seed :: proc(c: ^Checker, root: ^Link) {
                 case "none":  leaf.constraints += None
                 }
             }
-            // I wonder if I should just make any identifier leaf .LVALUE actually
             if leaf.token.kind != .IDENT {
                 leaf.mode = .RVALUE
             }
@@ -499,7 +498,7 @@ seed :: proc(c: ^Checker, root: ^Link) {
                 case:
                     //TODO: check into layout table and set constraints to `.PTR` 
                     // as well as layout info accordingly
-                    bad_node(c, node, "unknown type you are trying to cast to")
+                    bad_node(c, node, "type in cast does not exist")
                 }
                 type.mode = .NO_VALUE
                 return
@@ -507,14 +506,12 @@ seed :: proc(c: ^Checker, root: ^Link) {
         }
 
         if push := node_cast(Push, node); push != nil {
-            //TODO: assign layout to stack allocation
             push.constraints += { .PTR }
             push.mode = .RVALUE
             return
         }
 
         if func := node_cast(Function, node); func != nil {
-            //TODO: assign `callable` property of layout 
             func.constraints += { .PTR }
             func.mode = .RVALUE
             return
@@ -537,7 +534,6 @@ seed :: proc(c: ^Checker, root: ^Link) {
         }
         entity := new(Entity, c.allocator)
         // the idea of a `const var` kind of pisses me off because its an oxymoron
-        // but even in the case of functions, its still a variable that evalutes to a function
         entity.kind = .VARIABLE
         entity.scope = c.scope
         entity.constraints = decl.constraints
@@ -545,7 +541,7 @@ seed :: proc(c: ^Checker, root: ^Link) {
         if exists := declare(c.scope, decl.name.text, entity); exists != nil {
             bad_node(c, node, "this is a redeclaration")
             bad_node(c, exists.decl, "original is here")
-            c.error_count -= 1 // just count it as 1 man
+            c.error_count -= 1 // just count it as 1, man
         }
     }
 
@@ -558,6 +554,18 @@ seed :: proc(c: ^Checker, root: ^Link) {
 infer_node :: proc(c: ^Checker, node: ^Link) -> Operand {
     if node.mode == .INVALID {
         return operand_of(node, .INVALID) 
+    }
+    if push := node_cast(Push, node); push != nil {
+        // already taken care of in `seed`
+        return operand_of(node, push.mode) 
+    }
+    if layout := node_cast(Layout, node); layout != nil {
+        // already taken care of in `seed` (this is todo actually)
+        return operand_of(node, .NO_VALUE) 
+    }
+    if field := node_cast(Layout_Field, node); field != nil {
+        // This should be unreachable, actually
+        return operand_of(node, .NO_VALUE) 
     }
 
     if leaf := node_cast(Leaf, node); leaf != nil {
@@ -621,6 +629,16 @@ infer_node :: proc(c: ^Checker, node: ^Link) -> Operand {
         if unary_operand.mode == .INVALID {
             return operand_of(unary_expr, .INVALID) 
         }
+        // special: addr-of
+        if unary_expr.kind == .ADDRESS_OF {
+            if unary_operand.mode != .LVALUE {
+                bad_node(c, node, "expected an lvalue when taking memory address")
+                return operand_of(unary_expr, .INVALID)
+            }
+            unary_expr.constraints = Ptr
+            return operand_of(unary_expr, .RVALUE)
+        }
+
         if len(RULES[unary_expr.kind]) != 0 {
             if infer(unary_expr) {
                 c.changed = true
@@ -631,7 +649,7 @@ infer_node :: proc(c: ^Checker, node: ^Link) -> Operand {
             bad_node(c, node, "type of expression is a contradiction")
             return operand_of(unary_expr, .INVALID) 
         }
-        return operand_of(unary_expr, .RVALUE) //TODO: Will have to check for addr-of 
+        return operand_of(unary_expr, .RVALUE)
     }
 
     // NOTE: empty blocks are rejected by the parser
@@ -718,6 +736,29 @@ infer_node :: proc(c: ^Checker, node: ^Link) -> Operand {
         return operand_of(decl, .NO_VALUE) 
     }
 
+    if func := node_cast(Function, node); func != nil {
+    //TODO
+    }
+    if list := node_cast(Param_List, node); list != nil {
+    //TODO
+    }
+    if ret := node_cast(Return, node); ret != nil {
+    //TODO
+    }
+
+    if if_else := node_cast(If_Else, node); if_else != nil {
+    //TODO 
+    }
+    if while := node_cast(While, node); while != nil {
+    //TODO
+    }
+    if brk := node_cast(Break, node); brk != nil {
+    //TODO
+    }
+    if cont := node_cast(Continue, node); cont != nil {
+    //TODO
+    }
+    
     fmt.println(node.kind)
     assert(false, "unmatched node kind in `check_node`")
     return {}
