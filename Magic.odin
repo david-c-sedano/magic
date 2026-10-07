@@ -81,6 +81,7 @@ main :: proc() {
 
     fmt.printf("[MAGIC] finished in %d inference passes!!\n", c.passes)
     if c.error_count > 0 {
+        fmt.println()
         lex.flush_messages(g)
         return
     }

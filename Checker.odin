@@ -19,19 +19,10 @@ Operand :: struct {
     mode: Addressing_Mode,
 }
 
-Entity_Kind :: enum {
-    INVALID,
-    NONE,
-    VARIABLE,
-    FUNCTION,
-}
-
 Entity :: struct {
-    kind: Entity_Kind,
-    scope: ^Scope,
     constraints: Unknown,
     decl: ^Node(Decl),
-    //TODO: instance: Instance (function instantiating at call site)
+    template: ^Node(Function),
     //TODO: layout: Layout_Info
 }
 
@@ -57,6 +48,7 @@ Type :: enum {
     INT,
     FLOAT,
     PTR,
+    FUNC, // ya the spec is cooked
 }
 
 // unknown is resolved when only 1 field is set
@@ -82,8 +74,9 @@ Byte  : Unknown : { .BYTE }
 Int   : Unknown : { .INT }
 Float : Unknown : { .FLOAT }
 Ptr   : Unknown : { .PTR }
+Func  : Unknown : { .FUNC }
 
-Any : Unknown : { .NONE, .BOOL, .BYTE, .INT, .FLOAT, .PTR } 
+Any : Unknown : { .NONE, .BOOL, .BYTE, .INT, .FLOAT, .PTR, .FUNC } 
 
 /*  NOTE:
     addr-of, assignments and `SUBSCRIPT` are special cased because lvalue-ness is what is being checked
@@ -283,9 +276,6 @@ RULES := #partial [AST_Kind][]Type_Rule {
         Unary_Type_Rule { Bool, Bool },
     },
 }
-// NOTE: YES I AM AWARE THIS `RULES` DOES NOT MATCH THE SPEC AT ALL
-// calm down! this is just for testing I don't really want to write out all these type cases rn
-// Honestly I kind of am in favor of disallowing promotion into float anyways, we will see 
 
 init_checker :: proc(c: ^Checker, g: ^lex.Godlex) {
     c.g = g
@@ -308,8 +298,7 @@ lookup :: proc(scope: ^Scope, ident: ^Node(Leaf)) -> ^Entity {
     it := scope
     for it != nil {
         if entity, ok := it.symbols[ident.token.text]; ok {
-            // imagine needing to special case this
-            // because forward declarations fall into place too well
+            // multi-pass design mandates this check :O 
             if entity.decl.forward || entity.decl.span[0] < ident.span[0] {
                 return entity
             }
@@ -506,13 +495,13 @@ seed :: proc(c: ^Checker, root: ^Link) {
         }
 
         if push := node_cast(Push, node); push != nil {
-            push.constraints += { .PTR }
+            push.constraints = Ptr
             push.mode = .RVALUE
             return
         }
 
         if func := node_cast(Function, node); func != nil {
-            func.constraints += { .PTR }
+            func.constraints = Func 
             func.mode = .RVALUE
             return
         }
@@ -534,8 +523,6 @@ seed :: proc(c: ^Checker, root: ^Link) {
         }
         entity := new(Entity, c.allocator)
         // the idea of a `const var` kind of pisses me off because its an oxymoron
-        entity.kind = .VARIABLE
-        entity.scope = c.scope
         entity.constraints = decl.constraints
         entity.decl = decl
         if exists := declare(c.scope, decl.name.text, entity); exists != nil {
@@ -702,8 +689,6 @@ infer_node :: proc(c: ^Checker, node: ^Link) -> Operand {
             entity = local(c.scope, decl.name.text)
             if entity == nil {
                 entity = new(Entity, c.allocator)
-                entity.kind = .VARIABLE
-                entity.scope = c.scope
                 entity.constraints = decl.constraints
                 entity.decl = decl
                 declare(c.scope, decl.name.text, entity)

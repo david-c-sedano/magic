@@ -20,6 +20,7 @@ Annotation :: struct {
     constraints: Unknown,
     mode: Addressing_Mode,
     scope: ^Scope, // for blocks
+    instance: ^Node(Function), // for calls, copied, distinctly annotated
 }
 
 Link :: Node(struct{})
@@ -96,10 +97,6 @@ Leaf :: struct {
 Decl :: struct {
     forward: bool,
     name: lex.Token,
-    // this must be an actual bug with the odin compiler
-    // it will make `rhs` an invalid type about 25% of the time... 
-    // if I use `^Link` in this ONE STRUCT FIELD!!!
-    // it's not deterministic at all
     rhs: ^Node(struct{}),
 }
 
@@ -438,7 +435,9 @@ node_annotation_string :: proc(constraints: Unknown, mode: Addressing_Mode, allo
     if .INT in constraints do strings.write_string(&b, "Int, ") 
     if .FLOAT in constraints do strings.write_string(&b, "Float, ") 
     if .PTR in constraints do strings.write_string(&b, "Ptr, ") 
+    if .FUNC in constraints do strings.write_string(&b, "Func, ") 
     if .NONE in constraints do strings.write_string(&b, "None, ") 
+
     when ODIN_DEBUG {
         fmt.sbprintf(&b, "} <-- %s", mode)
     }
