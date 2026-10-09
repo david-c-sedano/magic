@@ -369,7 +369,7 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Node(Wrapped) {
         #partial switch op_token.kind {
         case .OPEN_PAREN:
             if MAX_PREC < min_prec do break expr_parse
-            params := parse_param_list(g)
+            params := parse_arg_list(g)
             if lex.has_error(g) {
                 return nil
             }
@@ -474,10 +474,10 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Node(Wrapped) {
     return left
 }
 
-parse_param_list :: proc(g: ^lex.Godlex) -> ^Node(Param_List) {
+parse_arg_list :: proc(g: ^lex.Godlex) -> ^Node(Arg_List) {
     span_start := len(g.history)
     oparen := lex.group(g)
-    params := make([dynamic]^Node(Wrapped), g.allocator)
+    args := make([dynamic]^Node(Wrapped), g.allocator)
 
     for {
         next := lex.group_ahead(g,1)
@@ -486,7 +486,7 @@ parse_param_list :: proc(g: ^lex.Godlex) -> ^Node(Param_List) {
         }
 
         if next.kind == .COMMA {
-            append(&params, nil)
+            append(&args, nil)
             lex.group(g)
             continue
         }
@@ -495,7 +495,7 @@ parse_param_list :: proc(g: ^lex.Godlex) -> ^Node(Param_List) {
         if lex.has_error(g) {
             return nil
         }
-        append(&params, arg)
+        append(&args, arg)
 
         next = lex.group_ahead(g,1)
         if next.kind == .COMMA {
@@ -506,8 +506,8 @@ parse_param_list :: proc(g: ^lex.Godlex) -> ^Node(Param_List) {
         }
     }
     lex.group(g)
-    list := new_node(Param_List, alloc=g.allocator)
-    list.params = params[:]
+    list := new_node(Arg_List, alloc=g.allocator)
+    list.args = args[:]
     list.span = { span_start, len(g.history) }
     return list 
 }

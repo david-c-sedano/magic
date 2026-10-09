@@ -41,7 +41,6 @@ main :: proc() {
 
     Options :: struct {
         file: ^os.File `args:"pos=0,required,file=r" usage:"Input File."`,
-        one_at_a_time: bool `usage:"Enabling accessibility by NOT forcing programmers to buy a vertical monitor in order to read all the ****ing error messages"`,
     }
     opts: Options
     flags.parse_or_exit(&opts, os.args, .Odin)
@@ -89,7 +88,7 @@ main :: proc() {
     fmt.println("generating feedback...")
     fmt.println()
 
-    mark_invalid_types(&c, root)
+    mark_unknown_types(&c, root)
     if c.error_count > 0 {
         lex.flush_messages(g)
         return

@@ -1,17 +1,17 @@
 
-decl one = 1.0
-one += 1.0
-one += 1
-two = 1
-1 = two
-three = 3
 
-forward three
 
-&two
-&one
-decl five = &one
-&five
-&69
-&three
+
+
+
+forward test = fu(a) do
+
+
+    return 1.0 as int
+    return 1.0 as int
+    return 1.0 as int
+    return 1.0 as int
+
+1 + test("deez nuts")
+
 
