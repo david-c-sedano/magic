@@ -19,10 +19,13 @@ Node :: struct($T: typeid) {
 Annotation :: struct {
     constraints: Unknown,
     mode: Addressing_Mode,
-    scope: ^Scope, // for blocks
-}
+    scope: ^Scope, 
 
-Link :: Node(struct{})
+    template_id: int,
+    instance: ^Node(Function),
+    instance_hash: Instance_Hash,
+    generic: bool,
+}
 
 AST_Kind :: enum {
     INVALID,
@@ -89,6 +92,8 @@ AST_Kind :: enum {
     LAYOUT,
 }
 
+Wrapped :: struct{} 
+
 Leaf :: struct {
     token: lex.Token
 }
@@ -96,49 +101,45 @@ Leaf :: struct {
 Decl :: struct {
     forward: bool,
     name: lex.Token,
-    // this must be an actual bug with the odin compiler
-    // it will make `rhs` an invalid type about 25% of the time... 
-    // if I use `^Link` in this ONE STRUCT FIELD!!!
-    // it's not deterministic at all
-    rhs: ^Node(struct{}),
+    rhs: ^Node(Wrapped),
 }
 
 Return :: struct {
-    result: ^Link
+    result: ^Node(Wrapped)
 }
 
-Break :: struct{}
-Continue :: struct{}
+Break :: distinct struct{} 
+Continue :: distinct struct{} 
 
 Bin_Expr :: struct {
     op_token: lex.Token,
-    left,right: ^Link,
+    left,right: ^Node(Wrapped),
 }
 
 Unary_Expr :: struct {
     op_token: lex.Token,
-    operand: ^Link, 
+    operand: ^Node(Wrapped), 
 }
 
-Param_List :: struct {
-    params: []^Link,
+Arg_List :: struct {
+    args: []^Node(Wrapped),
 }
 
 Block :: struct {
-    code: []^Link,
+    code: []^Node(Wrapped),
 }
 
 If_Else :: struct {
-    cond,if_body,else_body: ^Link,
+    cond,if_body,else_body: ^Node(Wrapped),
 }
 
 While :: struct {
-    cond,body: ^Link,
+    cond,body: ^Node(Wrapped),
 }
 
 Function :: struct {
-    params: []^Link,
-    body: ^Link,
+    params: []^Node(Wrapped),
+    body: ^Node(Wrapped),
 }
 
 Layout_Field :: struct {
@@ -147,7 +148,7 @@ Layout_Field :: struct {
 
 Layout :: struct {
     name: string,
-    fields: []^Link,
+    fields: []^Node(Wrapped),
 }
 
 Push :: struct {
@@ -170,7 +171,7 @@ init_kind_lookup :: proc "contextless" () {
     KIND_LOOKUP[Return] = { start=.RETURN }
     KIND_LOOKUP[Break] = { start=.BREAK }
     KIND_LOOKUP[Continue] = { start=.CONTINUE }
-    KIND_LOOKUP[Param_List] = { start=.PARAM_LIST }
+    KIND_LOOKUP[Arg_List] = { start=.PARAM_LIST }
     KIND_LOOKUP[Block] = { start=.BLOCK }
     KIND_LOOKUP[If_Else] = { start=.IF_ELSE }
     KIND_LOOKUP[While] = { start=.WHILE }
@@ -182,7 +183,7 @@ init_kind_lookup :: proc "contextless" () {
     KIND_LOOKUP[Unary_Expr] = { .UNARY_EXPR_BEGIN, .UNARY_EXPR_END }
 }
 
-node_cast :: proc($T: typeid, node: ^Link) -> ^Node(T) {
+node_cast :: proc($T: typeid, node: ^Node(Wrapped)) -> ^Node(T) {
     if node == nil {
         return nil
     }
@@ -216,11 +217,11 @@ new_node :: proc($T: typeid, specify:=AST_Kind.INVALID, alloc:=context.allocator
     return node
 }
 
-wrap_node :: proc(node: ^Node($T)) -> ^Link {
-    return cast(^Link) node
+wrap_node :: proc(node: ^Node($T)) -> ^Node(Wrapped) {
+    return cast(^Node(Wrapped)) node
 }
 
-pre_order_walk :: proc(node: ^Link, data: rawptr, visit: proc(^Link, rawptr)) {
+pre_order_walk :: proc(node: ^Node(Wrapped), data: rawptr, visit: proc(^Node(Wrapped), rawptr)) {
     if node == nil {
         return
     }
@@ -264,8 +265,8 @@ pre_order_walk :: proc(node: ^Link, data: rawptr, visit: proc(^Link, rawptr)) {
         return
     }
 
-    if list := node_cast(Param_List, node); list != nil {
-        for node in list.params {
+    if list := node_cast(Arg_List, node); list != nil {
+        for node in list.args {
             pre_order_walk(node, data, visit)
         }
         return
@@ -310,7 +311,7 @@ pre_order_walk :: proc(node: ^Link, data: rawptr, visit: proc(^Link, rawptr)) {
     assert(false, "unknown AST_Kind in `pre_order_walk`")
 }
 
-post_order_walk :: proc(node: ^Link, data: rawptr, visit: proc(^Link, rawptr)) {
+post_order_walk :: proc(node: ^Node(Wrapped), data: rawptr, visit: proc(^Node(Wrapped), rawptr)) {
     if node == nil {
         return
     }
@@ -361,8 +362,8 @@ post_order_walk :: proc(node: ^Link, data: rawptr, visit: proc(^Link, rawptr)) {
         return
     }
 
-    if list := node_cast(Param_List, node); list != nil {
-        for node in list.params {
+    if list := node_cast(Arg_List, node); list != nil {
+        for node in list.args {
             post_order_walk(node, data, visit)
         }
         visit(node, data)
@@ -413,6 +414,126 @@ post_order_walk :: proc(node: ^Link, data: rawptr, visit: proc(^Link, rawptr)) {
     assert(false, "unknown AST_Kind in `post_order_walk`")
 }
 
+copy_node_recursively :: proc(node: ^Node(Wrapped), allocator := context.allocator) -> ^Node(Wrapped) {
+    context.allocator = allocator
+    if node == nil {
+        return nil
+    }
+
+    copy_node :: proc(
+        node: ^Node($T), 
+        specify:=AST_Kind.INVALID, 
+        allocator := context.allocator
+    ) -> ^Node(T) {
+        context.allocator = allocator
+        if node == nil {
+            return nil
+        }
+
+        copied := new_node(T, specify)
+        copied^ = node^
+        copied.annotation = {}
+        return copied
+    }
+
+    if leaf := node_cast(Leaf, node); leaf != nil {
+        return wrap_node(copy_node(leaf))
+    }
+    if brk := node_cast(Break, node); brk != nil {
+        return wrap_node(copy_node(brk))
+    }
+    if cont := node_cast(Continue, node); cont != nil {
+        return wrap_node(copy_node(cont))
+    }
+    if push := node_cast(Push, node); push != nil {
+        return wrap_node(copy_node(push))
+    }
+    if field := node_cast(Layout_Field, node); field != nil {
+        return wrap_node(copy_node(field))
+    }
+
+    if ret := node_cast(Return, node); ret != nil {
+        new_ret := copy_node(ret)
+        new_ret.result = copy_node_recursively(ret.result)
+        return wrap_node(new_ret)
+    }
+
+    if decl := node_cast(Decl, node); decl != nil {
+        new_decl := copy_node(decl)
+        new_decl.rhs = copy_node_recursively(decl.rhs)
+        return wrap_node(new_decl)
+    }
+
+    if bin_expr := node_cast(Bin_Expr, node); bin_expr != nil {
+        new_bin_expr := copy_node(bin_expr, bin_expr.kind)
+        new_bin_expr.left = copy_node_recursively(bin_expr.left)
+        new_bin_expr.right = copy_node_recursively(bin_expr.right)
+        return wrap_node(new_bin_expr)
+    }
+
+    if unary_expr := node_cast(Unary_Expr, node); unary_expr != nil {
+        new_unary_expr := copy_node(unary_expr, unary_expr.kind)
+        new_unary_expr.operand = copy_node_recursively(unary_expr.operand)
+        return wrap_node(new_unary_expr)
+    }
+
+    if list := node_cast(Arg_List, node); list != nil {
+        new_list := copy_node(list)
+        new_list.args = make([]^Node(Wrapped), len(list.args))
+        for node,i in list.args {
+            new_list.args[i] = copy_node_recursively(node)
+        }
+        return wrap_node(new_list)
+    }
+
+    if block := node_cast(Block, node); block != nil {
+        new_block := copy_node(block)
+        new_block.code = make([]^Node(Wrapped), len(block.code))
+        for node,i in block.code {
+            new_block.code[i] = copy_node_recursively(node)
+        }
+        return wrap_node(new_block)
+    }
+
+    if if_else := node_cast(If_Else, node); if_else != nil {
+        new_if_else := copy_node(if_else)
+        new_if_else.cond = copy_node_recursively(if_else.cond)
+        new_if_else.if_body = copy_node_recursively(if_else.if_body)
+        new_if_else.else_body = copy_node_recursively(if_else.else_body)
+        return wrap_node(new_if_else)
+    }   
+
+    if while := node_cast(While, node); while != nil {
+        new_while := copy_node(while)
+        new_while.cond = copy_node_recursively(while.cond)
+        new_while.body = copy_node_recursively(while.body)
+        return wrap_node(new_while)
+    }
+
+    if func := node_cast(Function, node); func != nil {
+        new_func := copy_node(func)
+        new_func.params = make([]^Node(Wrapped), len(func.params))
+        for node,i in func.params {
+            new_func.params[i] = copy_node_recursively(node)
+        }
+        new_func.body = copy_node_recursively(func.body)
+        return wrap_node(new_func)
+    }
+
+    if layout := node_cast(Layout, node); layout != nil {
+        new_layout := copy_node(layout)
+        new_layout.fields = make([]^Node(Wrapped), len(layout.fields))
+        for node,i in layout.fields {
+            new_layout.fields[i] = copy_node_recursively(node)
+        }
+        return wrap_node(new_layout)
+    }
+
+    fmt.printf("%v\n", node.kind)
+    assert(false, "unknown AST_Kind in `copy_node`")
+    return nil
+}
+
 is_assign_op :: proc(kind: AST_Kind) -> AST_Kind {
     #partial switch kind {
     case .ASSIGN:             return .ASSIGN // w/e
@@ -433,12 +554,13 @@ node_annotation_string :: proc(constraints: Unknown, mode: Addressing_Mode, allo
     context.allocator = allocator
     b := strings.builder_make()
     strings.write_string(&b, "{ ")
-    if .BOOL in constraints do strings.write_string(&b, "Bool, ");
-    if .BYTE in constraints do strings.write_string(&b, "Byte, ") 
-    if .INT in constraints do strings.write_string(&b, "Int, ") 
+    if .BOOL  in constraints do strings.write_string(&b, "Bool, ");
+    if .BYTE  in constraints do strings.write_string(&b, "Byte, ") 
+    if .INT   in constraints do strings.write_string(&b, "Int, ") 
     if .FLOAT in constraints do strings.write_string(&b, "Float, ") 
-    if .PTR in constraints do strings.write_string(&b, "Ptr, ") 
-    if .NONE in constraints do strings.write_string(&b, "None, ") 
+    if .PTR   in constraints do strings.write_string(&b, "Ptr, ") 
+    if .NONE  in constraints do strings.write_string(&b, "None, ") 
+
     when ODIN_DEBUG {
         fmt.sbprintf(&b, "} <-- %s", mode)
     }

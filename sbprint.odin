@@ -4,7 +4,7 @@ package magic
 import "core:strings"
 import "core:fmt"
 
-sbprint :: proc(node: ^Link, b: ^strings.Builder, prefix := "") {
+sbprint :: proc(node: ^Node(Wrapped), b: ^strings.Builder, prefix := "") {
     
     if leaf := node_cast(Leaf, node); leaf != nil {
         fmt.sbprintf(b, "[%v %s]\n", leaf.token.kind, leaf.token.text)
@@ -100,10 +100,10 @@ sbprint :: proc(node: ^Link, b: ^strings.Builder, prefix := "") {
         return
     }
     
-    if list := node_cast(Param_List, node); list != nil {
+    if list := node_cast(Arg_List, node); list != nil {
         fmt.sbprintf(b, "param_list\n")
-        for node, i in list.params {
-            is_last := i == len(list.params) - 1
+        for node, i in list.args {
+            is_last := i == len(list.args) - 1
             next_prefix: string
             if !is_last {
                 fmt.sbprintf(b, "%s%s", prefix, "├───")

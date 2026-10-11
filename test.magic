@@ -1,16 +1,17 @@
 
-decl one = 1.0
-one += 1.0
-one += 1
-two = 1
-1 = two
-three = 3
+do
+    id("deez nuts")
+    id(1)
+    id(2.0)
+    id('3')
 
-forward three
+    // yes this function is cooked and blows up the call stack
+    // just for test
+    forward id = fu(x) do
+        metest(x, x)
+        forward metest = fu(x, y) x
+        id(x)
+        return x
 
-&two
-&one
-decl five = &one
-&five
-&69
-&three
+
+
