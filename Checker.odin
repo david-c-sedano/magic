@@ -20,6 +20,19 @@ Operand :: struct {
     mode: Addressing_Mode,
     template: ^Node(Function),
     instance: Instance_Hash,
+    layout: ^Layout_Info,
+}
+
+Layout_Info :: struct {
+    size: int,
+    fields: map[string]Field_Info,
+}
+
+Field_Info :: struct {
+    offset,size: int,
+    result: Type,
+    // non-nil only if `result = .PTR` and it has a layout assigned
+    layout: ^Layout_Info,
 }
 
 Entity :: struct {
@@ -51,6 +64,8 @@ Checker :: struct {
     instances: map[Instance_Hash]^Node(Function),
     template_ids: map[^Node(Function)]int,
     current_instance_id: int,
+
+    layouts: map[string]^Layout_Info
 }
 
 Instance_Hash :: distinct string
@@ -804,9 +819,9 @@ warn :: proc(c: ^Checker, errmsg: string, format: ..any) {
     lex.warning(c.g, errmsg, ..format)
 }
 
-seed :: proc(c: ^Checker, root: ^Node(Wrapped)) {
+seed :: proc(c: ^Checker, node: ^Node(Wrapped), toplevel := false) {
 
-    assign_starting_constraints :: proc(node: ^Node(Wrapped), data: rawptr) {
+    visit :: proc(node: ^Node(Wrapped), data: rawptr) {
         c := cast(^Checker) data
         
         if leaf := node_cast(Leaf, node); leaf != nil {
@@ -854,32 +869,48 @@ seed :: proc(c: ^Checker, root: ^Node(Wrapped)) {
             push.mode = .RVALUE
             return
         }
+        if field := node_cast(Layout_Field, node); field != nil {
+            field.mode = .NO_VALUE
+            return
+        }
+        if layout := node_cast(Layout, node); layout != nil {
+            layout.mode = .NO_VALUE
+            return
+        }
         if list := node_cast(Arg_List, node); list != nil {
-            // do not assign `Any`
             list.mode = .NO_VALUE
             return
         }
         if func := node_cast(Function, node); func != nil {
-            // handled in `mark_generics`
+            insane_nested_visitor :: proc(node: ^Node(Wrapped), data: rawptr) {
+                node.generic = true
+            }
+            // non-instance functions are generic no matter what
+            pre_order_walk(node, nil, insane_nested_visitor)
+            func.mode = .TEMPLATE
             return
         }
 
         node.constraints = Any
     }
 
-    mark_generics :: proc(node: ^Node(Wrapped), data: rawptr) {
-        c := cast(^Checker) data
-        insane_nested_visitor :: proc(node: ^Node(Wrapped), data: rawptr) {
-            node.generic = true
+    // since layouts can only appear at top level, dont even need a visitor
+    if toplevel {
+        root := node_cast(Block, node)
+        assert(root != nil)
+        layouts: [dynamic]^Node(Layout)
+        defer delete(layouts)
+
+        for mayb_layout in root.code {
+            if layout := node_cast(Layout, mayb_layout); layout != nil {
+                append(&layouts, layout)
+            }
         }
-        if func := node_cast(Function, node); func != nil {
-            pre_order_walk(node, nil, insane_nested_visitor)
-            func.mode = .TEMPLATE
-        }
+
+        //TODO: register all the layouts 
     }
 
-    post_order_walk(root, cast(rawptr) c, assign_starting_constraints)
-    pre_order_walk(root, cast(rawptr) c, mark_generics)
+    post_order_walk(node, cast(rawptr) c, visit)
 }
 
 infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
@@ -888,15 +919,15 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
     }
     if push := node_cast(Push, node); push != nil {
         // already taken care of in `seed`
-        return operand_of(node, push.mode) 
+        return operand_of(push, push.mode) 
     }
     if layout := node_cast(Layout, node); layout != nil {
         // already taken care of in `seed` (this is todo actually)
-        return operand_of(node, .NO_VALUE) 
+        return operand_of(layout, .NO_VALUE) 
     }
     if field := node_cast(Layout_Field, node); field != nil {
         // This should be unreachable, actually
-        return operand_of(node, .NO_VALUE) 
+        return operand_of(field, .NO_VALUE) 
     }
 
     if func := node_cast(Function, node); func != nil {

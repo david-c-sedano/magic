@@ -149,4 +149,7 @@ KEYWORDS := [?]string {
     "fu",
     "return",
     "layout",
+    "embed",
+    "overlay",
+    "using",
 }

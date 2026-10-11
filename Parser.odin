@@ -109,6 +109,17 @@ parse_layout_field :: proc(g: ^lex.Godlex) -> ^Node(Layout_Field) {
         lex.bad_token(g, colon, "expected colon to separate layout field name from type")
         return nil
     }
+    
+    keyw := lex.group_ahead(g,1,.KEYWORD)
+    embed,overlay,use: bool
+    if keyw.kind != .INVALID {
+        switch keyw.text {
+        case "embed":   embed = true
+        case "overlay": overlay = true
+        case "using":   use = true
+        }
+    }
+
     type := lex.group(g, .IDENT)
     if type.kind == .INVALID {
         lex.bad_token(g, type, "expected an identifier to denote layout field type")
@@ -119,6 +130,9 @@ parse_layout_field :: proc(g: ^lex.Godlex) -> ^Node(Layout_Field) {
     field.name = name.text
     field.type = type.text
     field.span = { span_start, len(g.history) }
+    field.embed = embed
+    field.overlay = overlay
+    field.use = use
     return field
 }
 

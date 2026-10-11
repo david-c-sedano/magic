@@ -1,7 +1,15 @@
+layout Vector2
+    x: s64
+    y: s64
+
+layout Example
+    a: s64
+    b: Vector2
+    c: embed Vector2
+    d: overlay s64
+    e: using Vector2
 
 factorial(1) + 1
 
-// this will compile even though "factorial" is used before declared
 forward factorial = fu(n)
-    if n == 0 do 1 else n * factorial(n-1)
-
+    if n == 0 do 1 else n * factorial(n-1) 

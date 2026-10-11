@@ -27,7 +27,17 @@ sbprint :: proc(node: ^Node(Wrapped), b: ^strings.Builder, prefix := "") {
     }
 
     if field := node_cast(Layout_Field, node); field != nil {
-        fmt.sbprintf(b, "%s: %s\n", field.name, field.type)
+        fmt.sbprintf(b, "%s: ", field.name)
+        if field.embed {
+            fmt.sbprintf(b, "embed ")
+        }
+        if field.overlay {
+            fmt.sbprintf(b, "overlay ")
+        }
+        if field.use {
+            fmt.sbprintf(b, "using ")
+        }
+        fmt.sbprintf(b, "%s\n", field.type)
         return
     }
     

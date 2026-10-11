@@ -61,7 +61,7 @@ main :: proc() {
 
     c: Checker
     init_checker(&c, g)
-    seed(&c, root) 
+    seed(&c, root, toplevel=true) 
     if c.error_count > 0 {
         lex.flush_messages(g)
         fmt.printf("[MAGIC] failed to seed!\n")
