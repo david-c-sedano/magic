@@ -21,7 +21,9 @@ Annotation :: struct {
     mode: Addressing_Mode,
     scope: ^Scope, 
 
-    instance: ^Node(Function), 
+    template_id: int,
+    instance: ^Node(Function),
+    instance_hash: Instance_Hash,
     generic: bool,
 }
 
@@ -552,12 +554,12 @@ node_annotation_string :: proc(constraints: Unknown, mode: Addressing_Mode, allo
     context.allocator = allocator
     b := strings.builder_make()
     strings.write_string(&b, "{ ")
-    if .BOOL in constraints do strings.write_string(&b, "Bool, ");
-    if .BYTE in constraints do strings.write_string(&b, "Byte, ") 
-    if .INT in constraints do strings.write_string(&b, "Int, ") 
+    if .BOOL  in constraints do strings.write_string(&b, "Bool, ");
+    if .BYTE  in constraints do strings.write_string(&b, "Byte, ") 
+    if .INT   in constraints do strings.write_string(&b, "Int, ") 
     if .FLOAT in constraints do strings.write_string(&b, "Float, ") 
-    if .PTR in constraints do strings.write_string(&b, "Ptr, ") 
-    if .NONE in constraints do strings.write_string(&b, "None, ") 
+    if .PTR   in constraints do strings.write_string(&b, "Ptr, ") 
+    if .NONE  in constraints do strings.write_string(&b, "None, ") 
 
     when ODIN_DEBUG {
         fmt.sbprintf(&b, "} <-- %s", mode)

@@ -86,9 +86,8 @@ main :: proc() {
     }
 
     fmt.println("generating feedback...")
-    fmt.println()
 
-    mark_unknown_types(&c, root)
+    finalize(&c, root)
     if c.error_count > 0 {
         lex.flush_messages(g)
         return

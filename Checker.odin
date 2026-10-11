@@ -3,6 +3,7 @@ package magic
 
 import lex "Godlex"
 import "core:fmt"
+import "core:strings"
 
 Addressing_Mode :: enum {
     INVALID = 1,
@@ -18,7 +19,7 @@ Operand :: struct {
     constraints: Unknown,
     mode: Addressing_Mode,
     template: ^Node(Function),
-    //TODO: layout: Layout_Info
+    instance: Instance_Hash,
 }
 
 Entity :: struct {
@@ -31,9 +32,10 @@ Scope :: struct {
     symbols: map[string]^Entity,
 }
 
-Instance :: struct {
-    prev: ^Instance,
-    func: ^Node(Function),
+Return_Stack :: struct {
+    prev: ^Return_Stack,
+    template: ^Node(Function),
+    instance: ^Node(Function),
     constraints: Unknown,
 }
 
@@ -41,11 +43,16 @@ Checker :: struct {
     using g: ^lex.Godlex,
     scope: ^Scope,
     mode: Addressing_Mode,
-    current: ^Instance,
+    current: ^Return_Stack,
     changed: bool,
     passes: int,
-    //TODO: layouts: map[string]Layout_Info
+
+    instances: map[Instance_Hash]^Node(Function),
+    template_ids: map[^Node(Function)]int,
+    current_instance_id: int,
 }
+
+Instance_Hash :: distinct string
 
 Type :: enum {
     NONE,
@@ -283,7 +290,8 @@ RULES := #partial [AST_Kind][]Type_Rule {
 
 init_checker :: proc(c: ^Checker, g: ^lex.Godlex) {
     c.g = g
-    push_scope(c)
+    c.instances = make(map[Instance_Hash]^Node(Function), c.allocator)
+    c.template_ids = make(map[^Node(Function)]int, c.allocator)
 }
 
 push_scope :: proc(c: ^Checker) -> ^Scope {
@@ -320,15 +328,7 @@ local :: proc(scope: ^Scope, name: string) -> ^Entity {
     return nil
 }
 
-global :: proc(scope: ^Scope, name: string) -> ^Entity {
-    glbl := global_scope(scope)
-    if entity, ok := glbl.symbols[name]; ok {
-        return entity
-    }
-    return nil
-}
-
-global_scope :: proc(scope: ^Scope) -> ^Scope {
+global :: proc(scope: ^Scope) -> ^Scope {
     it := scope
     for it != nil {
         if it.parent == nil {
@@ -454,6 +454,7 @@ infer :: proc {
     infer_unary,
 }
 
+// I hit a mad flow state, and ended up writing the hardest function in my entire carreer atm
 instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
     lhs := infer_node(c, call.left)
     if lhs.mode == .INVALID {
@@ -466,6 +467,8 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
         bad_node(c, call.left, "expression is not callable")
         return operand_of(call, .INVALID)
     }
+    id := register_template_hash(c, lhs.template) // muy importante!
+    call.template_id = id
     list := node_cast(Arg_List, call.right)
     assert(list != nil) // parser cannot allow this!
 
@@ -477,25 +480,83 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
         return operand_of(call, .INVALID)
     }
 
+    // check recursion
+    for active := c.current; active != nil; active = active.prev {
+        if active.template != lhs.template {
+            continue
+        }
+        // MATCHED SOME RECURSION!
+        for arg,i in list.args {
+            original := active.instance.params[i]
+            // uses the default argument, nothing to constrain, and `original` already gets inferred
+            if arg == nil {
+                if default := node_cast(Bin_Expr, original); default == nil {     
+                    bad_node(c, call.right, 
+                        "argument not supplied when function default arg does not exist"
+                    )
+                    return operand_of(call, .INVALID)
+                }
+                continue
+            }
+
+            operand := infer_node(c, arg)
+            if operand.mode == .INVALID {
+                return operand_of(call, .INVALID)
+            }
+            if operand.mode == .NO_VALUE || operand.mode == .TEMPLATE {
+                bad_node(c, arg, "recursive argument does not produce a value")
+                return operand_of(call, .INVALID)
+            }
+
+            common := operand.constraints & original.constraints
+            if card(common) == 0 {
+                warn(c, "recursive call cannot change paramater types")
+                return operand_of(call, .INVALID)
+            }
+            if common != arg.constraints ||
+               common != original.constraints {
+                c.changed = true
+            }
+            arg.constraints = common
+            original.constraints = common
+        }
+
+        // recursive call shares return type
+        common := call.constraints & active.constraints
+        if card(common) == 0 {
+            warn(c, "recursive call's return type does not match that of the outer function")
+            return operand_of(call, .INVALID)
+        }
+        if common != call.constraints || common != active.constraints {
+            c.changed = true
+        }
+        call.constraints = common
+        active.constraints = common
+        call.instance = active.instance
+        return operand_of(call, .RVALUE)
+    }
+
     if call.instance == nil {
-        fresh := copy_node_recursively(wrap_node(lhs.template),c.allocator)
+        fresh := copy_node_recursively(wrap_node(lhs.template), c.allocator)
         instance := node_cast(Function, fresh)
-        assert(instance != nil) 
-        // seed instance
-        post_order_walk(wrap_node(instance), cast(rawptr) c, assign_starting_constraints)
-        //TODO: this is where we would look into instance cache
-        // to see if we've already generated one that matches the type
+        for param in instance.params {
+            seed(c, param)
+        }
+        seed(c, instance.body)
         call.instance = instance
     }
 
+    // allocate caller scope
     caller: ^Scope
     callee: ^Scope
     if call.scope == nil {
         callee = c.scope
-        c.scope = global_scope(c.scope)
-        caller = push_scope(c) // caller scope
-        c.scope = callee // restore for now
+        c.scope = global(c.scope)
+        caller = new(Scope, c.allocator) 
+        caller.symbols = make(map[string]^Entity, c.allocator)
+        caller.parent = lhs.template.scope
         call.scope = caller
+        c.scope = callee // restore for now
     } else {
         callee = c.scope
         caller = call.scope
@@ -507,11 +568,12 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
         // argument supplied by caller
         if param != nil && arg != nil {
             assert(param.token.kind == .IDENT)
-            result := infer_node(c, arg)
-            if result.mode == .INVALID {
+
+            operand := infer_node(c, arg)
+            if operand.mode == .INVALID {
                 return operand_of(call, .INVALID)
             }
-            if instantiate_parameter(c, param.token.text, result, caller, 
+            if instantiate_parameter(c, param.token.text, caller, 
                 wrap_node(param),arg
             ) == nil {
                 return operand_of(call, .INVALID)
@@ -524,27 +586,29 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
                 assert(default.kind == .ASSIGN)
                 assert(param.token.kind == .IDENT)
 
-                result: Operand
+                operand: Operand
                 decl: ^Node(Wrapped)
                 if arg == nil {
                     c.scope = caller
-                    result = infer_node(c, default.right)
+                    operand = infer_node(c, default.right)
                     c.scope = callee
-                    if result.mode == .INVALID {
+
+                    if operand.mode == .INVALID {
                         warn(c, "only global/const identifiers allowed in default args")
                         return operand_of(call, .INVALID)
                     }
-                    if instantiate_parameter(c, param.token.text, result, caller,
+                    if instantiate_parameter(c, param.token.text, caller,
                         wrap_node(default),default.right
                     ) == nil {
                         return operand_of(call, .INVALID)
                     }
                 } else {
-                    result = infer_node(c, arg)
-                    if result.mode == .INVALID {
+                    operand := infer_node(c, arg)
+
+                    if operand.mode == .INVALID {
                         return operand_of(call, .INVALID)
                     }
-                    if instantiate_parameter(c, param.token.text, result, caller,
+                    if instantiate_parameter(c, param.token.text, caller,
                         wrap_node(default),arg
                     ) == nil {
                         return operand_of(call, .INVALID)
@@ -562,9 +626,10 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
     }
 
     // this is an insane power move btw, epic stack in call stack
-    current: Instance 
+    current: Return_Stack 
     current.prev = c.current
-    current.func = call.instance
+    current.template = lhs.template
+    current.instance = call.instance
     current.constraints = call.constraints
     c.current = &current
     defer c.current = current.prev
@@ -574,11 +639,9 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
     body := false
     for {
         c.changed = false
-        result := infer_node(c, wrap_node(call.instance.body))
-        if result.mode == .INVALID {
-            //TODO: improve this error message
-            bad_node(c, lhs.template, "failed to instantiate")
-            bad_node(c, call, "from this call")
+        operand := infer_node(c, wrap_node(call.instance.body))
+        if operand.mode == .INVALID {
+            bad_node(c, lhs.template, "failed to instantiate this")
             c.error_count -= 1 // count only 1 as error
             c.scope = callee
             return operand_of(call, .INVALID)
@@ -599,15 +662,31 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
         c.changed = true
     }
     call.constraints = common
+    call.instance.constraints = common
     call.instance.body.constraints = common
+
     if call.constraints == {} {
-        bad_node(c, call, "instatiation here cannot produce a valid type!")
-        bad_node(c, lhs.template, "function here")
+        bad_node(c, lhs.template, "instantiation of this cannot produce a valid type")
         c.error_count -= 1 // only 1
         c.scope = callee
         return operand_of(call, .INVALID)
     }
 
+    // reuse instance if already been generated
+    hash, ok := get_instance_hash(c, call.instance, id)
+    if ok {
+        if hash not_in c.instances {
+            c.instances[hash] = call.instance
+        }
+        call.instance_hash = hash
+    } else {
+        call.instance_hash = ""
+    }
+    // I wanna say the copy is redundant
+    // but not really, it's genuinely needed to do the whole inference shebang
+    // on an instance that may not match anything that has been generated
+    // as a penance though, `call.instance` will refer to the redundant copy
+    call.instance_hash = hash
     c.scope = callee
     return operand_of(call, .RVALUE)
 }
@@ -615,11 +694,10 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
 instantiate_parameter :: proc(
     c: ^Checker, 
     name: string,
-    operand: Operand,
     caller: ^Scope,
     param,arg: ^Node(Wrapped)
 ) -> ^Entity {
-    if operand.mode == .NO_VALUE || operand.mode == .TEMPLATE {
+    if arg.mode == .NO_VALUE || arg.mode == .TEMPLATE {
         bad_node(c, arg, "argument for parameter `%s` does not produce a value!", name)
         return nil
     }
@@ -627,7 +705,7 @@ instantiate_parameter :: proc(
     entity := local(caller, name)
     if entity == nil {
         entity = new(Entity,c.allocator)
-        entity.constraints = operand.constraints
+        entity.constraints = arg.constraints
         entity.decl = wrap_node(param)
         declare(caller, name, entity)
     } else if entity.decl != param {
@@ -635,15 +713,15 @@ instantiate_parameter :: proc(
         return nil
     }
 
-    common := entity.constraints & operand.constraints & param.constraints
+    common := entity.constraints & arg.constraints & param.constraints
     if default := node_cast(Bin_Expr, param); default != nil {
         // propogate to identifier on lhs of paramter decl as well
         default.left.constraints = common
         default.left.mode = .NO_VALUE
     }
 
-    if common != entity.constraints  || 
-       common != operand.constraints ||
+    if common != entity.constraints || 
+       common != arg.constraints    ||
        common != param.constraints {
         c.changed = true
     }
@@ -651,6 +729,64 @@ instantiate_parameter :: proc(
     arg.constraints = common
     param.constraints = common
     return entity
+}
+
+register_template_hash :: proc(c: ^Checker, template: ^Node(Function)) -> int {
+    if template not_in c.template_ids {
+        c.template_ids[template] = c.current_instance_id
+        c.current_instance_id += 1
+    }
+    return c.template_ids[template]
+}
+
+get_instance_hash :: proc(c: ^Checker, func: ^Node(Function), id: int) -> (Instance_Hash, bool) {
+    b := strings.builder_make(c.allocator)
+    fmt.sbprintf(&b, "func_%d_", id)
+
+    put_type_byte :: proc(b: ^strings.Builder, constraints: Unknown) -> bool {
+        if card(constraints) != 1 {
+            return false
+        }
+
+        if .BOOL  in constraints {
+            strings.write_string(b, "b") // b for "bool"
+            return true
+        }
+        if .BYTE  in constraints {
+            strings.write_string(b, "c") // c for "char"
+            return true
+        }
+        if .INT   in constraints {
+            strings.write_string(b, "i") // i for "int" 
+            return true
+        }
+        if .FLOAT in constraints {
+            strings.write_string(b, "f") // f for "float"
+            return true
+        }
+        if .PTR   in constraints {
+            strings.write_string(b, "p") // p for "ptr"
+            return true
+        }
+        if .NONE  in constraints {
+            strings.write_string(b, "n") // n for "none"
+            return true
+        }
+        return false
+    }
+
+    // paramters
+    for param in func.params {
+        if !put_type_byte(&b, param.constraints) {
+            return "", false
+        }
+    }
+    // return type
+    strings.write_string(&b, "__")
+    if !put_type_byte(&b, func.constraints) {
+        return "", false
+    }
+    return cast(Instance_Hash) strings.to_string(b), true
 }
 
 // I dont think it's needed to check `lex.has_error` schizophrenically 
@@ -663,109 +799,81 @@ warn :: proc(c: ^Checker, errmsg: string, format: ..any) {
     lex.warning(c.g, errmsg, ..format)
 }
 
-/* SEED PASS VISITORS */
-assign_starting_constraints :: proc(node: ^Node(Wrapped), data: rawptr) {
-    c := cast(^Checker) data
-    
-    if leaf := node_cast(Leaf, node); leaf != nil {
-        #partial switch leaf.token.kind {
-        case .BYTE:  leaf.constraints += Byte 
-        case .INT:   leaf.constraints += Int 
-        case .FLOAT: leaf.constraints += Float 
-        case .STR:   leaf.constraints += Ptr 
-        case .IDENT: leaf.constraints = Any
-        case .KEYWORD:
-            switch leaf.token.text {
-            case "true":  leaf.constraints += Bool 
-            case "false": leaf.constraints += Bool 
-            case "none":  leaf.constraints += None
-            }
-        }
-        if leaf.token.kind != .IDENT {
-            leaf.mode = .RVALUE
-        }
-        return
-    }
+seed :: proc(c: ^Checker, root: ^Node(Wrapped)) {
 
-    if bin_expr := node_cast(Bin_Expr, node); bin_expr != nil {
-        if bin_expr.kind == .CAST {
-            type := node_cast(Leaf, bin_expr.right)
-            assert(type.token.kind == .IDENT) // parser only enforces identifiers here!
-            switch type.token.text {
-            // do not need to throw error for `none` because `none` is a keyword
-            // since it's not an identifier, it's rejected by the parser
-            case "bool":  bin_expr.constraints += Bool 
-            case "byte":  bin_expr.constraints += Byte 
-            case "int":   bin_expr.constraints += Int 
-            case "float": bin_expr.constraints += Float 
-            case "ptr":   bin_expr.constraints += Ptr 
-            case:
-                //TODO: check into layout table and set constraints to `.PTR` 
-                // as well as layout info accordingly
-                bad_node(c, node, "type in cast does not exist")
+    assign_starting_constraints :: proc(node: ^Node(Wrapped), data: rawptr) {
+        c := cast(^Checker) data
+        
+        if leaf := node_cast(Leaf, node); leaf != nil {
+            #partial switch leaf.token.kind {
+            case .BYTE:  leaf.constraints += Byte 
+            case .INT:   leaf.constraints += Int 
+            case .FLOAT: leaf.constraints += Float 
+            case .STR:   leaf.constraints += Ptr 
+            case .IDENT: leaf.constraints = Any
+            case .KEYWORD:
+                switch leaf.token.text {
+                case "true":  leaf.constraints += Bool 
+                case "false": leaf.constraints += Bool 
+                case "none":  leaf.constraints += None
+                }
             }
-            type.mode = .NO_VALUE
+            if leaf.token.kind != .IDENT {
+                leaf.mode = .RVALUE
+            }
             return
         }
+
+        if bin_expr := node_cast(Bin_Expr, node); bin_expr != nil {
+            if bin_expr.kind == .CAST {
+                type := node_cast(Leaf, bin_expr.right)
+                assert(type.token.kind == .IDENT) // parser only enforces identifiers here!
+                switch type.token.text {
+                // do not need to throw error for `none` because `none` is a keyword
+                // since it's not an identifier, it's rejected by the parser
+                case "bool":  bin_expr.constraints += Bool 
+                case "byte":  bin_expr.constraints += Byte 
+                case "int":   bin_expr.constraints += Int 
+                case "float": bin_expr.constraints += Float 
+                case "ptr":   bin_expr.constraints += Ptr 
+                case:
+                    bad_node(c, node, "type in cast does not exist")
+                }
+                type.mode = .NO_VALUE
+                return
+            }
+        }
+
+        if push := node_cast(Push, node); push != nil {
+            push.constraints = Ptr
+            push.mode = .RVALUE
+            return
+        }
+        if list := node_cast(Arg_List, node); list != nil {
+            // do not assign `Any`
+            list.mode = .NO_VALUE
+            return
+        }
+        if func := node_cast(Function, node); func != nil {
+            // handled in `mark_generics`
+            return
+        }
+
+        node.constraints = Any
     }
 
-    if push := node_cast(Push, node); push != nil {
-        push.constraints = Ptr
-        push.mode = .RVALUE
-        return
-    }
-    if list := node_cast(Arg_List, node); list != nil {
-        // do not assign `Any`
-        list.mode = .NO_VALUE
-        return
-    }
-    if func := node_cast(Function, node); func != nil {
-        // handled in `mark_generics`
-        return
+    mark_generics :: proc(node: ^Node(Wrapped), data: rawptr) {
+        c := cast(^Checker) data
+        insane_nested_visitor :: proc(node: ^Node(Wrapped), data: rawptr) {
+            node.generic = true
+        }
+        if func := node_cast(Function, node); func != nil {
+            pre_order_walk(node, nil, insane_nested_visitor)
+            func.mode = .TEMPLATE
+        }
     }
 
-    node.constraints = Any
-}
-
-collect_forwards :: proc(node: ^Node(Wrapped), data: rawptr) {
-    c := cast(^Checker) data
-    decl := node_cast(Decl, node)
-    if decl == nil || !decl.forward {
-        return
-    }
-
-    if decl.rhs == nil {
-        decl.constraints = Any
-    } else {
-        decl.constraints = decl.rhs.constraints
-    }
-    entity := new(Entity, c.allocator)
-    // the idea of a `const var` kind of pisses me off because its an oxymoron
-    entity.constraints = decl.constraints
-    entity.decl = wrap_node(decl)
-    if exists := declare(c.scope, decl.name.text, entity); exists != nil {
-        bad_node(c, node, "this is a redeclaration")
-        bad_node(c, exists.decl, "original is here")
-        c.error_count -= 1 // just count it as 1, man
-    }
-}
-
-mark_generics :: proc(node: ^Node(Wrapped), data: rawptr) {
-    c := cast(^Checker) data
-    insane_nested_visitor :: proc(node: ^Node(Wrapped), data: rawptr) {
-        node.generic = true
-    }
-    if func := node_cast(Function, node); func != nil {
-        pre_order_walk(node, nil, insane_nested_visitor)
-        func.mode = .TEMPLATE
-    }
-}
-
-seed :: proc(c: ^Checker, root: ^Node(Wrapped)) {
-    assert(root.kind == .BLOCK)
-    root.scope = c.scope
     post_order_walk(root, cast(rawptr) c, assign_starting_constraints)
-    pre_order_walk(root, cast(rawptr) c, collect_forwards)
     pre_order_walk(root, cast(rawptr) c, mark_generics)
 }
 
@@ -787,6 +895,10 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
     }
 
     if func := node_cast(Function, node); func != nil {
+        if func.scope == nil {
+            func.scope = c.scope
+        }
+
         // I forget I allow any expr in function parameters
         // because it is convenient for writing the parser and allowing default args xD
         for param in func.params {
@@ -856,13 +968,21 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
     if bin_expr := node_cast(Bin_Expr, node); bin_expr != nil {
         // SPECIAL CASES!!
         if bin_expr.kind == .CAST {
+            lhs := infer_node(c, bin_expr.left)
+            if lhs.mode == .INVALID {
+                return operand_of(bin_expr, .INVALID) 
+            }
             return operand_of(bin_expr, .RVALUE)
         }
         if is_assign_op(bin_expr.kind) != .INVALID {
             return take_care_of_assignment(c, bin_expr)
         }
         if bin_expr.kind == .CALL {
-            return instantiate(c, bin_expr)
+            operand := instantiate(c, bin_expr)
+            if operand.mode == .INVALID {
+                bad_node(c, bin_expr, "while trying to instantiate from call")
+            }
+            return operand
         }
 
         lhs := infer_node(c, bin_expr.left)
@@ -879,7 +999,6 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
             }
         }
         if card(bin_expr.constraints) == 0 {
-            // TODO: improve this errmsg
             bad_node(c, node, "type of expression is a contradiction")
             return operand_of(bin_expr, .INVALID) 
         }
@@ -907,7 +1026,6 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
             }
         }
         if card(unary_expr.constraints) == 0 {
-            //TODO: improve this errmsg
             bad_node(c, node, "type of expression is a contradiction")
             return operand_of(unary_expr, .INVALID) 
         }
@@ -921,7 +1039,32 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
         if block.scope == nil {
             push_scope(c)
             block.scope = c.scope
+
+            for stmnt in block.code {
+                if decl := node_cast(Decl, stmnt); decl != nil {
+                    if !decl.forward {
+                        continue
+                    }
+
+                    if decl.rhs == nil {
+                        decl.constraints = Any
+                    } else {
+                        decl.constraints = decl.rhs.constraints
+                    }
+                    entity := new(Entity, c.allocator)
+                    // the idea of a `const var` kind of pisses me off because its an oxymoron
+                    entity.constraints = decl.constraints
+                    entity.decl = wrap_node(decl)
+                    if exists := declare(c.scope, decl.name.text, entity); exists != nil {
+                        bad_node(c, node, "this is a redeclaration")
+                        bad_node(c, exists.decl, "original is here")
+                        c.error_count -= 1
+                        return operand_of(block, .INVALID)
+                    }
+                }
+            }
         }
+
         c.scope = block.scope
         result: Operand
         for stmnt in block.code {
@@ -977,25 +1120,22 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
             return operand_of(decl, .INVALID)
         }
 
-        entity: ^Entity
-        if !decl.forward {
-            entity = local(c.scope, decl.name.text)
-            if entity == nil {
-                entity = new(Entity, c.allocator)
-                entity.constraints = decl.constraints
-                entity.decl = wrap_node(decl)
-                declare(c.scope, decl.name.text, entity)
-            } else if wrap_node(decl) != entity.decl {
-                bad_node(c, decl, "this is a redeclaration")
-                bad_node(c, entity.decl, "original is here")
-                c.error_count -= 1
-                return operand_of(decl, .INVALID)
-            }
-        } else {
-            entity = global(c.scope, decl.name.text)
-            assert(entity != nil) // `collect_forward` means this CANNOT fail 
-            // redeclarations of forwards already checked as well
+        entity := local(c.scope, decl.name.text)
+        if decl.forward {
+            assert(entity != nil)
+            assert(entity.decl == wrap_node(decl))
+        } else if entity == nil {
+            entity = new(Entity, c.allocator)
+            entity.constraints = decl.constraints
+            entity.decl = wrap_node(decl)
+            declare(c.scope, decl.name.text, entity)
+        } else if wrap_node(decl) != entity.decl {
+            bad_node(c, decl, "this is a redeclaration")
+            bad_node(c, entity.decl, "original is here")
+            c.error_count -= 1
+            return operand_of(decl, .INVALID)
         }
+
         if decl.rhs == nil {
             return operand_of(decl, .NO_VALUE)
         }
@@ -1042,19 +1182,19 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
             return operand_of(ret, .NO_VALUE)
         }
 
-        result := infer_node(c, ret.result)
-        if result.mode == .NO_VALUE || result.mode == .TEMPLATE {
+        operand := infer_node(c, ret.result)
+        if operand.mode == .NO_VALUE || operand.mode == .TEMPLATE {
             bad_node(c, ret, "return does not produce value!")
             return operand_of(ret, .INVALID)
         }
 
-        common := c.current.constraints & result.constraints
+        common := c.current.constraints & operand.constraints
         if common != c.current.constraints ||
-           common != result.constraints {
+           common != operand.constraints {
             c.changed = true
         }
         c.current.constraints = common
-        result.expr.constraints = common
+        operand.expr.constraints = common
         return operand_of(ret, .NO_VALUE)
     }
 
@@ -1117,7 +1257,6 @@ take_care_of_assignment :: proc(c: ^Checker, expr: ^Node(Bin_Expr)) -> Operand {
         }
     }
     if card(expr.constraints) == 0 {
-        //TODO: improve this errmsg
         bad_node(c, expr, "invalid types for assignment")
         return operand_of(expr, .INVALID)
     }
@@ -1139,9 +1278,24 @@ check_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
     return operand
 }
 
-mark_unknown_types :: proc(c: ^Checker, root: ^Node(Wrapped)) {
+finalize :: proc(c: ^Checker, root: ^Node(Wrapped)) {
     visit :: proc(node: ^Node(Wrapped), data: rawptr) {
         c := cast(^Checker) data
+        // resolve recursing hashes
+        if node.instance != nil && node.instance_hash == "" {
+            hash,ok := get_instance_hash(c, node.instance, node.template_id)
+            if !ok {
+                bad_node(c, node, "cannot resolve function instantiation")
+                if card(node.instance.constraints) > 1 {
+                    warn(c, "cannot resolve type between %s",
+                        node_annotation_string(node.constraints, node.mode, c.allocator)
+                    )
+                }
+                return
+            }
+            node.instance_hash = hash
+        }
+
         // `INVALID`s must be handled and the program exited before `mark_unknown_types`
         // also `generic=true` means unknown is allowed, this is why annotation has `instance`
         if node.mode == .INVALID || node.mode == .TEMPLATE || node.generic {
@@ -1166,4 +1320,11 @@ mark_unknown_types :: proc(c: ^Checker, root: ^Node(Wrapped)) {
         // go pre-order so messages are not in weird order
         pre_order_walk(node, cast(rawptr) c, visit) 
     }
+    for hash,instance in c.instances {
+        when ODIN_DEBUG {
+            fmt.printf("generated %s\n", hash)
+        }
+        pre_order_walk(wrap_node(instance), cast(rawptr) c, visit) 
+    }
+    when ODIN_DEBUG do fmt.println()
 }
