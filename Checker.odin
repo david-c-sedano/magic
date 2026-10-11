@@ -37,13 +37,14 @@ Return_Stack :: struct {
     template: ^Node(Function),
     instance: ^Node(Function),
     constraints: Unknown,
+    loop_depth: int,
 }
 
 Checker :: struct {
     using g: ^lex.Godlex,
     scope: ^Scope,
-    mode: Addressing_Mode,
     current: ^Return_Stack,
+    loop_depth: int,
     changed: bool,
     passes: int,
 
@@ -364,6 +365,10 @@ operand_of :: proc(node: ^Node($T), mode: Addressing_Mode, template: ^Node(Funct
     return operand
 }
 
+produces_value :: proc(mode: Addressing_Mode) -> bool {
+    return mode != .NO_VALUE && mode != .TEMPLATE
+}
+
 /* TYPE OPERATIONS */
 overlap_one_and_result :: proc(operand,result: Unknown, rule: Unary_Type_Rule) -> bool {
     return card(operand & rule.operand) != 0 && 
@@ -503,7 +508,7 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
             if operand.mode == .INVALID {
                 return operand_of(call, .INVALID)
             }
-            if operand.mode == .NO_VALUE || operand.mode == .TEMPLATE {
+            if !produces_value(operand.mode) {
                 bad_node(c, arg, "recursive argument does not produce a value")
                 return operand_of(call, .INVALID)
             }
@@ -683,7 +688,7 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
         call.instance_hash = ""
     }
     // I wanna say the copy is redundant
-    // but not really, it's genuinely needed to do the whole inference shebang
+    // but not really, it's should be needed to do the whole inference shebang
     // on an instance that may not match anything that has been generated
     // as a penance though, `call.instance` will refer to the redundant copy
     call.instance_hash = hash
@@ -697,7 +702,7 @@ instantiate_parameter :: proc(
     caller: ^Scope,
     param,arg: ^Node(Wrapped)
 ) -> ^Entity {
-    if arg.mode == .NO_VALUE || arg.mode == .TEMPLATE {
+    if !produces_value(arg.mode) {
         bad_node(c, arg, "argument for parameter `%s` does not produce a value!", name)
         return nil
     }
@@ -1105,10 +1110,6 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
     if decl := node_cast(Decl, node); decl != nil {
         rhs_operand: Operand
         if decl.rhs != nil {
-            // infer node first then declare
-            // keep in mind smthn like `forward one = one + one` is allowed
-            // because the `one` is already declared before being checked here
-            // which is literally the entire point of `forward`
             rhs_operand = infer_node(c, decl.rhs)
             if rhs_operand.mode == .INVALID {
                 warn(c, "declaration of `%s` failed!", decl.name.text)
@@ -1116,7 +1117,7 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
             }
         }
         if rhs_operand.mode == .NO_VALUE {
-            bad_node(c, decl, "expression in declaration produces no value")
+            bad_node(c, decl, "expression in declaration produces no value or function..")
             return operand_of(decl, .INVALID)
         }
 
@@ -1183,7 +1184,7 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
         }
 
         operand := infer_node(c, ret.result)
-        if operand.mode == .NO_VALUE || operand.mode == .TEMPLATE {
+        if !produces_value(operand.mode) {
             bad_node(c, ret, "return does not produce value!")
             return operand_of(ret, .INVALID)
         }
@@ -1199,16 +1200,117 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
     }
 
     if if_else := node_cast(If_Else, node); if_else != nil {
-    //TODO 
+        cond := infer_node(c, if_else.cond)
+        if cond.mode == .INVALID {
+            return operand_of(if_else, .INVALID)
+        }
+        if !produces_value(cond.mode) {
+            bad_node(c, if_else, "condition does not produce value!")
+            return operand_of(if_else, .INVALID)
+        }
+        common := cond.constraints & Bool
+        if common == {} {
+            bad_node(c, if_else.cond, "condition must be a boolean")
+            return operand_of(if_else, .INVALID)
+        }
+        if common != if_else.cond.constraints {
+            c.changed = true
+        }
+        if_else.cond.constraints = common
+
+        if_operand := infer_node(c, if_else.if_body)
+        if if_operand.mode == .INVALID {
+            return operand_of(if_else, .INVALID)
+        }
+        // if without else produces no value
+        if if_else.else_body == nil { 
+            return operand_of(if_else, .NO_VALUE)
+        }
+        else_operand  := infer_node(c, if_else.else_body)
+        if else_operand.mode == .INVALID {
+            return operand_of(if_else, .INVALID)
+        }
+
+        if !produces_value(if_operand.mode) || !produces_value(else_operand.mode) {
+            return operand_of(if_else, .NO_VALUE)
+        }
+        common = if_operand.constraints   & 
+                 else_operand.constraints & 
+                 if_else.constraints
+        if common != if_operand.constraints   ||
+           common != else_operand.constraints || 
+           common != if_else.constraints {
+            c.changed = true
+        }
+        if_else.if_body.constraints = common
+        if_else.else_body.constraints = common
+        if_else.constraints = common
+        // if both if and else bodies exist, and theyre the same type
+        // then `if .. do .. else ..` can return value
+        if card(common) == 0 {
+            bad_node(c, if_else, "branch types are not the same")
+            return operand_of(if_else, .INVALID)
+        }
+        return operand_of(if_else, .RVALUE)
     }
+
     if while := node_cast(While, node); while != nil {
-    //TODO
+        cond := infer_node(c, while.cond)
+        if cond.mode == .INVALID {
+            return operand_of(while, .INVALID)
+        }
+        if !produces_value(cond.mode) {
+            bad_node(c, while, "condition does not produce value!")
+            return operand_of(while, .INVALID)
+        }
+        common := cond.constraints & Bool
+        if common == {} {
+            bad_node(c, while.cond, "condition must be a boolean")
+            return operand_of(while, .INVALID)
+        }
+        if common != while.cond.constraints {
+            c.changed = true
+        }
+        while.cond.constraints = common
+
+        // I swear bro, the `Return_Stack` is peak coding
+        depth := &c.loop_depth
+        if c.current != nil {
+            depth = &c.current.loop_depth
+        }
+        depth^ += 1
+        defer depth^ -= 1
+
+        operand := infer_node(c, while.body)
+        if operand.mode == .INVALID {
+            return operand_of(while, .INVALID)
+        }
+        // loops don't return values, im not dealing with this halting problem bullsh**
+        return operand_of(while, .NO_VALUE)
     }
+
     if brk := node_cast(Break, node); brk != nil {
-    //TODO
+        depth := c.loop_depth
+        if c.current != nil {
+            depth = c.current.loop_depth
+        }
+        if depth == 0 {
+            bad_node(c, brk, "`break` outside loop")
+            return operand_of(brk, .INVALID)
+        }
+        return operand_of(brk, .NO_VALUE)
     }
+
     if cont := node_cast(Continue, node); cont != nil {
-    //TODO
+        depth := c.loop_depth
+        if c.current != nil {
+            depth = c.current.loop_depth
+        }
+        if depth == 0 {
+            bad_node(c, cont, "`continue` outside loop")
+            return operand_of(cont, .INVALID)
+        }
+        return operand_of(cont, .NO_VALUE)
     }
     
     fmt.println(node.kind)
@@ -1281,7 +1383,7 @@ check_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
 finalize :: proc(c: ^Checker, root: ^Node(Wrapped)) {
     visit :: proc(node: ^Node(Wrapped), data: rawptr) {
         c := cast(^Checker) data
-        // resolve recursing hashes
+        // resolve hashes of recursive calls that were set to the same instance
         if node.instance != nil && node.instance_hash == "" {
             hash,ok := get_instance_hash(c, node.instance, node.template_id)
             if !ok {
@@ -1296,7 +1398,7 @@ finalize :: proc(c: ^Checker, root: ^Node(Wrapped)) {
             node.instance_hash = hash
         }
 
-        // `INVALID`s must be handled and the program exited before `mark_unknown_types`
+        // `INVALID`s must be handled and the program exited before `finalize`
         // also `generic=true` means unknown is allowed, this is why annotation has `instance`
         if node.mode == .INVALID || node.mode == .TEMPLATE || node.generic {
             return

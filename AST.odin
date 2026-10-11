@@ -143,6 +143,7 @@ Function :: struct {
 }
 
 Layout_Field :: struct {
+    embed,overlay,use: bool,
     name,type: string,
 }
 
