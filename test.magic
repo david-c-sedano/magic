@@ -1,14 +1,15 @@
 
 do
     id("deez nuts")
-    //id(1)
-    //id(2.0)
-    //id('3')
-    (fu(x) x) + 1
+    id(1)
+    id(2.0)
+    id('3')
 
     // yes this function is cooked and blows up the call stack
     // just for test
     forward id = fu(x) do
+        metest(x, x)
+        forward metest = fu(x, y) x
         id(x)
         return x
 
