@@ -1,0 +1,12 @@
+decl a = 10
+decl b = 3
+decl c = (a + b) * 2
+c
+
+decl identity = fu(x) x
+
+identity(5)
+identity(true)
+identity(3.5)
+
+

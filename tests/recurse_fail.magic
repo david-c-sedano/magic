@@ -1,0 +1,11 @@
+layout A
+    next: B
+
+layout B
+    next: A
+
+forward follow = fu(p, n) do
+    if n == 0 do return 0
+    return follow(p.next, n - 1)
+
+follow(push A, 3)

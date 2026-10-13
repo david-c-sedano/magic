@@ -1,0 +1,21 @@
+layout A
+    x: s64
+
+layout B
+    pad: s64
+    x: s64
+
+decl get_x = fu(p) p.x
+
+get_x(push A)
+get_x(push B)
+
+layout Node
+    value: s64
+    next: Node
+
+forward walk = fu(p, n) do
+    if n == 0 do return p.value
+    return walk(p.next, n - 1)
+
+walk(push Node, 3)

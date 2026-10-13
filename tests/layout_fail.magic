@@ -1,0 +1,7 @@
+layout Vector2
+    x: s64
+    y: s64
+
+decl v = push Vector2
+(v as ptr).x
+

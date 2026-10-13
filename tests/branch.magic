@@ -1,0 +1,12 @@
+layout A
+    x: s64
+
+layout B
+    padding: s64
+    x: s64
+
+decl choose = fu(condition, a, b) do
+    if condition do a else b
+
+decl result = choose(true, push A, push B)
+result.x

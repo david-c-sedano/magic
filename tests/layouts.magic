@@ -1,0 +1,39 @@
+layout Vector2
+    x: s64
+    y: s64
+
+decl v = push Vector2
+v.x = 10
+v.y = 20
+v.x
+
+layout Box
+    point: using Vector2
+
+decl b = push Box
+b.x = 3
+b.point.y = 4
+
+layout U
+    small: u8
+    big: overlay s64
+    tail: s64
+
+decl u = push U
+u.big = 42
+u.tail = 7
+
+layout Inner
+    x: s64
+
+layout Middle
+    a: s64
+    inner: using Inner
+
+layout Outer
+    b: s64
+    middle: using Middle
+
+decl p = push Outer
+p.x = 42
+p.middle.inner.x = 69
