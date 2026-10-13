@@ -18,6 +18,7 @@ Node :: struct($T: typeid) {
 // Parser does not touch this!!
 Annotation :: struct {
     constraints: Unknown,
+    layout: ^Layout_Info,
     mode: Addressing_Mode,
     scope: ^Scope, 
 

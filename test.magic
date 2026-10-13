@@ -1,15 +1,19 @@
+
 layout Vector2
     x: s64
     y: s64
 
-layout Example
-    a: s64
-    b: Vector2
-    c: embed Vector2
-    d: overlay s64
-    e: using Vector2
+layout Node
+    data: s32
+    next: Node
 
-factorial(1) + 1
+forward id1 = fu(p) do
+    return p 
 
-forward factorial = fu(n)
-    if n == 0 do 1 else n * factorial(n-1) 
+forward id2 = fu(p) p
+
+decl v = id1(push Vector2)
+v.x = 42
+
+decl n = id2(push Node)
+n.next.next.data = 12

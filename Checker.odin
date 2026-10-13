@@ -25,14 +25,17 @@ Operand :: struct {
 
 Layout_Info :: struct {
     size: int,
-    fields: map[string]Field_Info,
+    fields: map[string]^Field_Info,
+    resolving,done: bool,
+    node: ^Node(Layout),
 }
 
 Field_Info :: struct {
     offset,size: int,
-    result: Type,
-    // non-nil only if `result = .PTR` and it has a layout assigned
-    layout: ^Layout_Info,
+    result: Type, 
+    layout: ^Layout_Info, // non-nil only if `result = .PTR` and it has a layout assigned
+    embed,overlay,use: bool, // `while` is a valid identifier in odin but not `using` ?
+    node: ^Node(Layout_Field),
 }
 
 Entity :: struct {
@@ -65,7 +68,10 @@ Checker :: struct {
     template_ids: map[^Node(Function)]int,
     current_instance_id: int,
 
-    layouts: map[string]^Layout_Info
+    ptr_size: int,
+    layouts: map[string]^Layout_Info,
+    layout_ids: map[^Layout_Info]int,
+    current_layout_id: int,
 }
 
 Instance_Hash :: distinct string
@@ -304,10 +310,14 @@ RULES := #partial [AST_Kind][]Type_Rule {
     },
 }
 
-init_checker :: proc(c: ^Checker, g: ^lex.Godlex) {
+init_checker :: proc(c: ^Checker, g: ^lex.Godlex, ptr_size := 8) {
     c.g = g
     c.instances = make(map[Instance_Hash]^Node(Function), c.allocator)
     c.template_ids = make(map[^Node(Function)]int, c.allocator)
+    c.layouts = make(map[string]^Layout_Info, c.allocator)
+    c.layout_ids = make(map[^Layout_Info]int, c.allocator)
+    c.current_layout_id = 1 // 0 is reserved for "no layout"
+    c.ptr_size = ptr_size
 }
 
 push_scope :: proc(c: ^Checker) -> ^Scope {
@@ -370,11 +380,23 @@ declare :: proc(scope: ^Scope, name: string, entity: ^Entity) -> ^Entity {
     return nil
 }
 
-operand_of :: proc(node: ^Node($T), mode: Addressing_Mode, template: ^Node(Function) = nil) -> Operand {
+set_layout :: proc(c: ^Checker, node: ^Node($T), layout: ^Layout_Info) {
+    if node.layout != layout {
+        node.layout = layout
+        c.changed = true
+    }
+}
+
+operand_of :: proc(
+    node: ^Node($T), 
+    mode: Addressing_Mode, 
+    template: ^Node(Function) = nil
+) -> Operand {
     node.mode = mode
     operand: Operand
     operand.expr = wrap_node(node)
     operand.constraints = node.constraints
+    operand.layout = node.layout
     operand.mode = mode
     operand.template = template
     return operand
@@ -491,6 +513,7 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
     call.template_id = id
     list := node_cast(Arg_List, call.right)
     assert(list != nil) // parser cannot allow this!
+    infer_node(c, call.right) // set `.NO_VALUE`
 
     if len(lhs.template.params) != len(list.args) {
         bad_node(c, call.right, "function expects %d args but caller provided %d",
@@ -510,7 +533,7 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
             original := active.instance.params[i]
             // uses the default argument, nothing to constrain, and `original` already gets inferred
             if arg == nil {
-                if default := node_cast(Bin_Expr, original); default == nil {     
+                if default := node_cast(Bin_Expr, original); default == nil {
                     bad_node(c, call.right, 
                         "argument not supplied when function default arg does not exist"
                     )
@@ -525,6 +548,10 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
             }
             if !produces_value(operand.mode) {
                 bad_node(c, arg, "recursive argument does not produce a value")
+                return operand_of(call, .INVALID)
+            }
+            if operand.layout != original.layout {
+                bad_node(c, arg, "recursive call cannot change the layout of parameters")
                 return operand_of(call, .INVALID)
             }
 
@@ -553,6 +580,7 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
         call.constraints = common
         active.constraints = common
         call.instance = active.instance
+        set_layout(c, call, active.instance.layout)
         return operand_of(call, .RVALUE)
     }
 
@@ -684,6 +712,11 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
     call.constraints = common
     call.instance.constraints = common
     call.instance.body.constraints = common
+    // if no explicit return
+    if call.instance.layout == nil {
+        set_layout(c, call.instance, call.instance.body.layout)
+    }
+    set_layout(c, call, call.instance.layout)
 
     if call.constraints == {} {
         bad_node(c, lhs.template, "instantiation of this cannot produce a valid type")
@@ -702,10 +735,9 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
     } else {
         call.instance_hash = ""
     }
-    // I wanna say the copy is redundant
-    // but not really, it's should be needed to do the whole inference shebang
-    // on an instance that may not match anything that has been generated
-    // as a penance though, `call.instance` will refer to the redundant copy
+    // I wanna say the copy is redundant and wasteful
+    // but maybe not? it should be needed to do the whole inference shebang
+    // since any instance may not match anything that has been generated...
     call.instance_hash = hash
     c.scope = callee
     return operand_of(call, .RVALUE)
@@ -732,6 +764,12 @@ instantiate_parameter :: proc(
         bad_node(c, param, "duplicate parameter `%s`", name)
         return nil
     }
+
+    if entity.layout != arg.layout {
+        entity.layout = arg.layout
+        c.changed = true
+    }
+    set_layout(c, param, arg.layout)
 
     common := entity.constraints & arg.constraints & param.constraints
     if default := node_cast(Bin_Expr, param); default != nil {
@@ -763,7 +801,7 @@ get_instance_hash :: proc(c: ^Checker, func: ^Node(Function), id: int) -> (Insta
     b := strings.builder_make(c.allocator)
     fmt.sbprintf(&b, "func_%d_", id)
 
-    put_type_byte :: proc(b: ^strings.Builder, constraints: Unknown) -> bool {
+    put_type_byte :: proc(b: ^strings.Builder, constraints: Unknown, layout_id:=0) -> bool {
         if card(constraints) != 1 {
             return false
         }
@@ -785,7 +823,11 @@ get_instance_hash :: proc(c: ^Checker, func: ^Node(Function), id: int) -> (Insta
             return true
         }
         if .PTR   in constraints {
-            strings.write_string(b, "p") // p for "ptr"
+            if layout_id != 0 {
+                fmt.sbprintf(b, "p%d", layout_id)
+            } else {
+                strings.write_string(b, "p") // p for "ptr"
+            }
             return true
         }
         if .NONE  in constraints {
@@ -797,13 +839,26 @@ get_instance_hash :: proc(c: ^Checker, func: ^Node(Function), id: int) -> (Insta
 
     // paramters
     for param in func.params {
-        if !put_type_byte(&b, param.constraints) {
+        ok: bool
+        if param.layout != nil {
+            ok = put_type_byte(&b, param.constraints, c.layout_ids[param.layout])
+        } else {
+            ok = put_type_byte(&b, param.constraints)
+        }
+        if !ok {
             return "", false
         }
     }
+
     // return type
     strings.write_string(&b, "__")
-    if !put_type_byte(&b, func.constraints) {
+    ok: bool
+    if func.layout != nil {
+        ok = put_type_byte(&b, func.constraints, c.layout_ids[func.layout])
+    } else {
+        ok = put_type_byte(&b, func.constraints)
+    }
+    if !ok {
         return "", false
     }
     return cast(Instance_Hash) strings.to_string(b), true
@@ -820,6 +875,56 @@ warn :: proc(c: ^Checker, errmsg: string, format: ..any) {
 }
 
 seed :: proc(c: ^Checker, node: ^Node(Wrapped), toplevel := false) {
+    // since layouts can only appear at top level, dont even need a visitor
+    if toplevel {
+        root := node_cast(Block, node)
+        assert(root != nil)
+
+        // pass 1: collect+allocate layouts
+        for mayb_layout in root.code {
+            if layout := node_cast(Layout, mayb_layout); layout != nil {
+                if _, exists := c.layouts[layout.name]; exists {
+                    bad_node(c, layout, "duplicate layout `%s`", layout.name)
+                    return
+                }
+
+                layout_info := new(Layout_Info, c.allocator)
+                layout_info.node = layout
+                c.layouts[layout.name] = layout_info 
+                layout_info.fields = make(map[string]^Field_Info, c.allocator)
+                c.layout_ids[layout_info] = c.current_layout_id
+                c.current_layout_id += 1
+
+                for field in layout.fields {
+                    field_node := node_cast(Layout_Field, field)
+                    assert(field_node != nil)
+                    field_info := new(Field_Info, c.allocator)
+                    field_info.node = field_node
+                    field_info.embed = field_node.embed
+                    field_info.overlay = field_node.overlay
+                    field_info.use = field_node.use
+
+                    assert(field_info.node != nil)
+
+                    name := field_info.node.name
+                    _,exists := layout_info.fields[name]
+                    if exists {
+                        bad_node(c, layout, "duplicate field name %s in layout", name)
+                        return
+                    }
+
+                    layout_info.fields[name] = field_info
+                }
+            }
+        }
+
+        // pass 2: MORE RECURSIVE NONESE: SOMEONE PLEASE SABE MEEEEE
+        for _, layout in c.layouts {
+            if !resolve_layout(c, layout) {
+                return
+            }
+        }
+    }
 
     visit :: proc(node: ^Node(Wrapped), data: rawptr) {
         c := cast(^Checker) data
@@ -857,7 +962,13 @@ seed :: proc(c: ^Checker, node: ^Node(Wrapped), toplevel := false) {
                 case "float": bin_expr.constraints += Float 
                 case "ptr":   bin_expr.constraints += Ptr 
                 case:
-                    bad_node(c, node, "type in cast does not exist")
+                    layout,exists := c.layouts[type.token.text]
+                    if exists {
+                        bin_expr.constraints += Ptr
+                        bin_expr.layout = layout
+                    } else {
+                        bad_node(c, bin_expr, "type or layout in cast does not exist")
+                    }
                 }
                 type.mode = .NO_VALUE
                 return
@@ -866,19 +977,13 @@ seed :: proc(c: ^Checker, node: ^Node(Wrapped), toplevel := false) {
 
         if push := node_cast(Push, node); push != nil {
             push.constraints = Ptr
+            layout,exists := c.layouts[push.type]
+            if exists {
+                push.layout = layout
+            } else {
+                bad_node(c, push, "type or layout in stack alloc does not exist")
+            }
             push.mode = .RVALUE
-            return
-        }
-        if field := node_cast(Layout_Field, node); field != nil {
-            field.mode = .NO_VALUE
-            return
-        }
-        if layout := node_cast(Layout, node); layout != nil {
-            layout.mode = .NO_VALUE
-            return
-        }
-        if list := node_cast(Arg_List, node); list != nil {
-            list.mode = .NO_VALUE
             return
         }
         if func := node_cast(Function, node); func != nil {
@@ -894,40 +999,127 @@ seed :: proc(c: ^Checker, node: ^Node(Wrapped), toplevel := false) {
         node.constraints = Any
     }
 
-    // since layouts can only appear at top level, dont even need a visitor
-    if toplevel {
-        root := node_cast(Block, node)
-        assert(root != nil)
-        layouts: [dynamic]^Node(Layout)
-        defer delete(layouts)
+    post_order_walk(node, cast(rawptr) c, visit)
+}
 
-        for mayb_layout in root.code {
-            if layout := node_cast(Layout, mayb_layout); layout != nil {
-                append(&layouts, layout)
+resolve_layout :: proc(c: ^Checker, layout: ^Layout_Info) -> bool {
+    if layout.done {
+        return true
+    }
+    if layout.resolving {
+        bad_node(c, layout.node, "recursive embedded layout")
+        return false
+    }
+    layout.resolving = true
+    defer layout.resolving = false
+
+    counter := 0
+    group_offset := 0
+    group_size := 0
+
+    for ast_field in layout.node.fields {
+        field_node := node_cast(Layout_Field, ast_field)
+        assert(field_node != nil)
+        field := layout.fields[field_node.name]
+        type_name := field.node.type
+        size := 0
+        switch type_name {
+        case "u8", "s8":  size = 1; field.result = .BYTE
+        case "u16","s16": size = 2; field.result = .INT
+        case "u32","s32": size = 4; field.result = .INT
+        case "u64","s64": size = 8; field.result = .INT
+
+        case "f32": size = 4; field.result = .FLOAT
+        case "f64": size = 8; field.result = .FLOAT
+        case "ptr": size = c.ptr_size; field.result = .PTR
+
+        case:
+            other, ok := c.layouts[type_name]
+            if !ok {
+                bad_node(c, field.node, "undeclared layout `%s`", type_name)
+                return false
+            }
+
+            field.result = .PTR
+            field.layout = other
+            if field.embed || field.use {
+                // of course you need to recurse for this!
+                if !resolve_layout(c, other) {
+                    return false
+                }
+                size = other.size
+            } else {
+                size = c.ptr_size
             }
         }
 
-        //TODO: register all the layouts 
+        field.size = size
+        if !field.overlay {
+            counter += group_size
+            group_offset = counter
+            group_size = size
+        } else {
+            group_size = max(group_size, size)
+        }
+        field.offset = group_offset
     }
 
-    post_order_walk(node, cast(rawptr) c, visit)
+    // promote 'using` fields
+    for ast_field in layout.node.fields {
+        field_node := node_cast(Layout_Field, ast_field)
+        assert(field_node != nil)
+        field := layout.fields[field_node.name]
+        if !field.use {
+            continue
+        }
+
+        if field.layout == nil {
+            bad_node(c, field.node, "field of type `%s` has no fields to promote!", 
+                field.node.type, 
+            )
+            return false
+        }
+
+        assert(field.layout.done)
+        for name, child in field.layout.fields {
+            if _, exists := layout.fields[name]; exists {
+                bad_node(c, field.node, "promoted field `%s` in `%s` already exists", 
+                    name, field.layout.node.name
+                )
+                return false
+            }
+            promoted := new(Field_Info, c.allocator)
+            promoted^ = child^
+            promoted.offset = field.offset + child.offset
+            layout.fields[name] = promoted
+        }
+    }
+
+    // NO PADDING!!! IMAGINE LYING TO THE PROGRAMMER
+    // if you want padding do ts manually
+    layout.size = counter + group_size
+    layout.done = true
+    return true
 }
 
 infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
     if node.mode == .INVALID {
         return operand_of(node, .INVALID) 
     }
-    if push := node_cast(Push, node); push != nil {
-        // already taken care of in `seed`
-        return operand_of(push, push.mode) 
-    }
     if layout := node_cast(Layout, node); layout != nil {
-        // already taken care of in `seed` (this is todo actually)
+        for field in layout.fields {
+            infer_node(c, field)
+        }
         return operand_of(layout, .NO_VALUE) 
     }
     if field := node_cast(Layout_Field, node); field != nil {
-        // This should be unreachable, actually
         return operand_of(field, .NO_VALUE) 
+    }
+    if push := node_cast(Push, node); push != nil {
+        return operand_of(push, push.mode) 
+    }
+    if list := node_cast(Arg_List, node); list != nil {
+        return operand_of(list, .NO_VALUE)
     }
 
     if func := node_cast(Function, node); func != nil {
@@ -956,11 +1148,6 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
         }
 
         return operand_of(func, .TEMPLATE, func)
-    }
-    if list := node_cast(Arg_List, node); list != nil {
-        // taken care of by CALL binary expr case
-        // I think this is unreachable as well, w/e man
-        return operand_of(list, .NO_VALUE)
     }
 
     if leaf := node_cast(Leaf, node); leaf != nil {
@@ -994,6 +1181,7 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
             } else {
                 leaf.mode = .LVALUE
             }
+            set_layout(c, leaf, entity.layout)
             //NOTE: not checking for contradiction here is VERY DELIBERATE
             // because an ident can resolve to a `fu` template (like from `forward`)
             // which doesn't produce value and has no type
@@ -1011,7 +1199,7 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
             return operand_of(bin_expr, .RVALUE)
         }
         if is_assign_op(bin_expr.kind) != .INVALID {
-            return take_care_of_assignment(c, bin_expr)
+            return lvalue_check_and_assign(c, bin_expr)
         }
         if bin_expr.kind == .CALL {
             operand := instantiate(c, bin_expr)
@@ -1019,6 +1207,9 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
                 bad_node(c, bin_expr, "while trying to instantiate from call")
             }
             return operand
+        }
+        if bin_expr.kind == .DEREFERENCE {
+            return lvalue_check_and_dereference(c, bin_expr)
         }
 
         lhs := infer_node(c, bin_expr.left)
@@ -1106,14 +1297,12 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
         for stmnt in block.code {
             result = infer_node(c, stmnt)
             if result.mode == .INVALID {
-                block.mode = .INVALID
-                // dont return yet! it's prolly better to accumulate errors 
+                // go calm w/ the error messages mkay
+                c.scope = old_scope
+                return operand_of(block, .INVALID)
             }
         }
         c.scope = old_scope
-        if block.mode  == .INVALID {
-            return operand_of(block, .INVALID)
-        }
 
         common := block.constraints & result.constraints
         if common != block.constraints || common != result.constraints {
@@ -1128,6 +1317,8 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
             block.mode = .RVALUE 
             operand.mode = .RVALUE
             operand.expr = result.expr
+            set_layout(c, block, result.layout)
+            operand.layout = result.layout
         } else if result.mode == .TEMPLATE {
             // in case block "evaluates" to a function
             // this is pure polish BTW
@@ -1196,6 +1387,10 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
         decl.constraints = common
         decl.rhs.constraints = common
         entity.constraints = common
+        if entity.layout != rhs_operand.layout {
+            entity.layout = rhs_operand.layout
+            c.changed = true
+        }
         return operand_of(decl, .NO_VALUE) 
     }
 
@@ -1227,6 +1422,14 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
         }
         c.current.constraints = common
         operand.expr.constraints = common
+
+        if c.current.instance.layout == nil {
+            set_layout(c, c.current.instance, operand.layout)
+        } else if c.current.instance.layout != operand.layout {
+            bad_node(c, ret, "layout return value cannot change")
+            return operand_of(ret, .INVALID)
+        }
+
         return operand_of(ret, .NO_VALUE)
     }
 
@@ -1276,11 +1479,17 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
         if_else.if_body.constraints = common
         if_else.else_body.constraints = common
         if_else.constraints = common
+
         // if both if and else bodies exist, and theyre the same type
         // then `if .. do .. else ..` can return value
         if card(common) == 0 {
             bad_node(c, if_else, "branch types are not the same")
             return operand_of(if_else, .INVALID)
+        }
+        if if_operand.layout == else_operand.layout {
+            set_layout(c, if_else, if_operand.layout)
+        } else {
+            set_layout(c, if_else, nil)
         }
         return operand_of(if_else, .RVALUE)
     }
@@ -1349,51 +1558,134 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
     return {}
 }
 
-take_care_of_assignment :: proc(c: ^Checker, expr: ^Node(Bin_Expr)) -> Operand {
-    lhs := infer_node(c, expr.left)
+lvalue_check_and_assign :: proc(c: ^Checker, assign: ^Node(Bin_Expr)) -> Operand {
+    lhs := infer_node(c, assign.left)
     if lhs.mode == .INVALID {
-        return operand_of(expr, .INVALID) 
+        return operand_of(assign, .INVALID) 
     }
     if lhs.mode == .CONST {
-        bad_node(c, expr.left, "cannot assign to constant (or symbols declared via `forward`)")
-        return operand_of(expr, .INVALID) 
+        bad_node(c, assign.left, "cannot assign to constant (or symbols declared via `forward`)")
+        return operand_of(assign, .INVALID) 
     }
     if lhs.mode != .LVALUE {
-        bad_node(c, expr.left, "this is not a valid lvalue in assignment")
-        return operand_of(expr, .INVALID) 
+        bad_node(c, assign.left, "this is not a valid lvalue in assignment")
+        return operand_of(assign, .INVALID) 
     }
-    rhs := infer_node(c, expr.right)
+    rhs := infer_node(c, assign.right)
     if rhs.mode == .INVALID {
-        return operand_of(expr, .INVALID) 
+        return operand_of(assign, .INVALID) 
     }
 
-    if expr.kind == .ASSIGN {
-        common := lhs.constraints & rhs.constraints & expr.constraints
+    if assign.kind == .ASSIGN {
+        common := lhs.constraints & rhs.constraints & assign.constraints
         if common != lhs.constraints ||
            common != rhs.constraints ||
-           common != expr.constraints {
+           common != assign.constraints {
             c.changed = true
         }
         lhs.expr.constraints = common
         rhs.expr.constraints = common
-        expr.constraints = common
+        assign.constraints = common
     } else {
         // result must be storable back into lhs
-        common := lhs.constraints & expr.constraints
-        if common != lhs.constraints || common != expr.constraints {
+        common := lhs.constraints & assign.constraints
+        if common != lhs.constraints || common != assign.constraints {
             c.changed = true
         }
         lhs.expr.constraints = common
-        expr.constraints = common
-        if infer_bin_as(expr, is_assign_op(expr.kind)) {
+        assign.constraints = common
+        if infer_bin_as(assign, is_assign_op(assign.kind)) {
             c.changed = true
         }
     }
-    if card(expr.constraints) == 0 {
-        bad_node(c, expr, "invalid types for assignment")
-        return operand_of(expr, .INVALID)
+    if card(assign.constraints) == 0 {
+        bad_node(c, assign, "invalid types for assignment")
+        return operand_of(assign, .INVALID)
     }
-    return operand_of(expr, .RVALUE)
+    // keep it simple, don't overwrite layout
+    return operand_of(assign, .RVALUE)
+}
+
+lvalue_check_and_dereference :: proc(c: ^Checker, deref: ^Node(Bin_Expr)) -> Operand {
+    lhs := infer_node(c, deref.left)
+    if lhs.mode == .INVALID {
+        return operand_of(deref, .INVALID) 
+    }
+    if !produces_value(lhs.mode) {
+        bad_node(c, deref.left, "expected a pointer value")
+        return operand_of(deref, .INVALID) 
+    }
+
+    common := lhs.constraints & Ptr
+    if common == {} {
+        bad_node(c, deref.left, "can only dereference `ptr` types")
+        return operand_of(deref, .INVALID)
+    }
+    if deref.left.constraints != common {
+        c.changed = true
+        deref.left.constraints = common
+    }
+    right := node_cast(Leaf, deref.right)
+    assert(right != nil)
+    right.mode = .NO_VALUE
+
+    name := right.token.text
+    result: Type
+    builtin := true // HACK: allow "s64" and friends to go thru
+    switch name {
+    case "u8","s8": 
+        result = .BYTE
+    case "u16","s16",
+         "u32","s32",
+         "u64","s64":
+        result = .INT
+    case "f32","f64": 
+        result = .FLOAT
+    case "ptr":
+        result = .PTR
+    case:
+        builtin = false
+    }
+
+    if builtin {
+        expect := Unknown {result}
+        common := deref.constraints & expect
+        if common == {} {
+            bad_node(c, deref.right, "result of dereference is contradiction")
+            return operand_of(deref, .INVALID)
+        }
+        if common != deref.constraints {
+            c.changed = true
+        }
+        deref.constraints = common
+        return operand_of(deref, .LVALUE)
+    }
+
+    if lhs.layout == nil {
+        bad_node(c, deref.right, "pointer has no layout assigned to it for dereference!")
+        return operand_of(deref, .INVALID)
+    }
+    field, ok := lhs.layout.fields[name]
+    if !ok {
+        bad_node(c, deref.right, "field does not exist in layout `%s`", lhs.layout.node.name)
+        return operand_of(deref, .INVALID)
+    }
+
+    expect := Unknown {field.result}
+    common = deref.constraints & expect
+    if common == {} {
+        bad_node(c, deref.right, "result of dereference is contradiction")
+        return operand_of(deref, .INVALID)
+    }
+    if common != deref.constraints {
+        c.changed = true
+    }
+    deref.constraints = common
+    set_layout(c, deref, field.layout)
+    if field.embed || field.use {
+        return operand_of(deref, .RVALUE) // weird as crap, but yes this is like addr-of
+    }
+    return operand_of(deref, .LVALUE)
 }
 
 // difference between `check_node` and `infer_node`...

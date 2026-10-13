@@ -425,6 +425,7 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Node(Wrapped) {
             }
             leaf := new_node(Leaf, alloc=g.allocator)
             leaf.token = field
+            leaf.span = { len(g.history)-1, len(g.history) }
             dereference := new_node(Bin_Expr, .DEREFERENCE, g.allocator)
             dereference.op_token = op_token
             dereference.left = left
