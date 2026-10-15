@@ -26,6 +26,11 @@ sbprint :: proc(node: ^Node(Wrapped), b: ^strings.Builder, prefix := "") {
         return
     }
 
+    if sizeof := node_cast(Size_Of, node); sizeof != nil {
+        fmt.sbprintf(b, "size_of %s\n", sizeof.type)
+        return
+    }
+
     if field := node_cast(Layout_Field, node); field != nil {
         fmt.sbprintf(b, "%s: ", field.name)
         if field.embed {

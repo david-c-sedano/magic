@@ -79,6 +79,7 @@ AST_Kind :: enum {
    
     DECL,
     PUSH,
+    SIZE_OF,
     RETURN,
     BREAK,
     CONTINUE,
@@ -157,8 +158,12 @@ Push :: struct {
     type: string,
 }
 
+Size_Of :: struct {
+    type: string,
+}
+
 KIND_LOOKUP: map[typeid]struct{ start,end:AST_Kind }
-kind_lookup_mem: [9999]u8
+kind_lookup_mem: [19999]u8
 kind_lookup_arena: vmem.Arena
 
 @(init)
@@ -170,6 +175,7 @@ init_kind_lookup :: proc "contextless" () {
     KIND_LOOKUP[Leaf] = { start=.LEAF }
     KIND_LOOKUP[Decl] = { start=.DECL }
     KIND_LOOKUP[Push] = { start=.PUSH }
+    KIND_LOOKUP[Size_Of] = { start = .SIZE_OF }
     KIND_LOOKUP[Return] = { start=.RETURN }
     KIND_LOOKUP[Break] = { start=.BREAK }
     KIND_LOOKUP[Continue] = { start=.CONTINUE }
@@ -240,6 +246,9 @@ pre_order_walk :: proc(node: ^Node(Wrapped), data: rawptr, visit: proc(^Node(Wra
         return
     }
     if push := node_cast(Push, node); push != nil {
+        return
+    }
+    if sizeof := node_cast(Size_Of, node); sizeof != nil {
         return
     }
     if field := node_cast(Layout_Field, node); field != nil {
@@ -331,6 +340,10 @@ post_order_walk :: proc(node: ^Node(Wrapped), data: rawptr, visit: proc(^Node(Wr
         return
     }
     if push := node_cast(Push, node); push != nil {
+        visit(node, data)
+        return
+    }
+    if sizeof := node_cast(Size_Of, node); sizeof != nil {
         visit(node, data)
         return
     }
@@ -449,6 +462,9 @@ copy_node_recursively :: proc(node: ^Node(Wrapped), allocator := context.allocat
     }
     if push := node_cast(Push, node); push != nil {
         return wrap_node(copy_node(push))
+    }
+    if sizeof := node_cast(Size_Of, node); sizeof != nil {
+        return wrap_node(copy_node(sizeof))
     }
     if field := node_cast(Layout_Field, node); field != nil {
         return wrap_node(copy_node(field))

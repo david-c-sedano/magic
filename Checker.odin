@@ -898,6 +898,7 @@ seed :: proc(c: ^Checker, node: ^Node(Wrapped), toplevel := false) {
                 for field in layout.fields {
                     field_node := node_cast(Layout_Field, field)
                     assert(field_node != nil)
+
                     field_info := new(Field_Info, c.allocator)
                     field_info.node = field_node
                     field_info.embed = field_node.embed
@@ -907,9 +908,16 @@ seed :: proc(c: ^Checker, node: ^Node(Wrapped), toplevel := false) {
                     assert(field_info.node != nil)
 
                     name := field_info.node.name
+                    switch name {
+                    case "u8","u16","u32","u64",
+                         "s8","s16","s32","s64",
+                         "f32","f64":
+                        bad_node(c, layout, "reserved field name `%s` in layout", field_node.name)
+                        return
+                    }
                     _,exists := layout_info.fields[name]
                     if exists {
-                        bad_node(c, layout, "duplicate field name %s in layout", name)
+                        bad_node(c, layout, "duplicate field name `%s` in layout", name)
                         return
                     }
 
@@ -986,6 +994,19 @@ seed :: proc(c: ^Checker, node: ^Node(Wrapped), toplevel := false) {
             push.mode = .RVALUE
             return
         }
+
+        if sizeof := node_cast(Size_Of, node); sizeof != nil {
+            sizeof.constraints = Int
+            layout,exists := c.layouts[sizeof.type]
+            if exists {
+                sizeof.layout = layout
+            } else {
+                bad_node(c, sizeof, "type or layout in `size_of` does not exist")
+            }
+            sizeof.mode = .RVALUE
+            return
+        }
+
         if func := node_cast(Function, node); func != nil {
             insane_nested_visitor :: proc(node: ^Node(Wrapped), data: rawptr) {
                 node.generic = true
@@ -1118,6 +1139,9 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
     if push := node_cast(Push, node); push != nil {
         return operand_of(push, push.mode) 
     }
+    if sizeof := node_cast(Size_Of, node); sizeof != nil {
+        return operand_of(sizeof, sizeof.mode) 
+    }
     if list := node_cast(Arg_List, node); list != nil {
         return operand_of(list, .NO_VALUE)
     }
@@ -1183,7 +1207,7 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
             }
             set_layout(c, leaf, entity.layout)
             //NOTE: not checking for contradiction here is VERY DELIBERATE
-            // because an ident can resolve to a `fu` template (like from `forward`)
+            // because an ident can resolve to a `def` template (like from `forward`)
             // which doesn't produce value and has no type
         }
         return operand_of(leaf, leaf.mode)
@@ -1210,6 +1234,10 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
         }
         if bin_expr.kind == .DEREFERENCE {
             return lvalue_check_and_dereference(c, bin_expr)
+        }
+        if bin_expr.kind == .SUBSCRIPT {
+            bad_node(c, bin_expr, "subscripting is todo! sorry!")
+            return operand_of(bin_expr, .INVALID)
         }
 
         lhs := infer_node(c, bin_expr.left)
@@ -1662,7 +1690,7 @@ lvalue_check_and_dereference :: proc(c: ^Checker, deref: ^Node(Bin_Expr)) -> Ope
     }
 
     if lhs.layout == nil {
-        bad_node(c, deref.right, "pointer has no layout assigned to it for dereference!")
+        bad_node(c, deref.left, "pointer has no layout assigned to it for dereference!")
         return operand_of(deref, .INVALID)
     }
     field, ok := lhs.layout.fields[name]

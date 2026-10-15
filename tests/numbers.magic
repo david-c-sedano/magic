@@ -3,7 +3,7 @@ decl b = 3
 decl c = (a + b) * 2
 c
 
-decl identity = fu(x) x
+decl identity = def(x) x
 
 identity(5)
 identity(true)

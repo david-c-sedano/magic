@@ -345,7 +345,7 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Node(Wrapped) {
                 }
                 return wrap_node(if_else)
 
-            case "fu":
+            case "def":
                 func := parse_func(g)
                 if lex.has_error(g) {
                     return nil
@@ -358,6 +358,13 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Node(Wrapped) {
                     return nil
                 }
                 return wrap_node(push)
+
+            case "size_of":
+                sizeof := parse_size_of(g)
+                if lex.has_error(g) {
+                    return nil
+                }
+                return wrap_node(sizeof)
             }
         }
 
@@ -646,10 +653,10 @@ parse_if_else :: proc(g: ^lex.Godlex) -> ^Node(If_Else) {
 
 parse_func :: proc(g: ^lex.Godlex) -> ^Node(Function) {
     span_start := len(g.history)
-    fu_keyw := lex.group(g)
+    def_keyw := lex.group(g)
     oparen := lex.group(g, .OPEN_PAREN)
     if oparen.kind == .INVALID {
-        lex.bad_token(g, oparen, "expected param list after `fu`")
+        lex.bad_token(g, oparen, "expected param list after `def`")
         return nil
     }
 
@@ -701,4 +708,18 @@ parse_push :: proc(g: ^lex.Godlex) -> ^Node(Push) {
     push.type = type.text
     push.span = { span_start, len(g.history) }
     return push
+}
+
+parse_size_of :: proc(g: ^lex.Godlex) -> ^Node(Size_Of) {
+    span_start := len(g.history)
+    sizeof_keyw := lex.group(g, .KEYWORD)
+    type := lex.group(g, .IDENT)
+    if type.kind == .INVALID {
+        lex.bad_token(g, type, "expected a type/layout after after `size_of`")
+        return nil
+    }
+    sizeof := new_node(Size_Of, alloc=g.allocator)
+    sizeof.type = type.text
+    sizeof.span = { span_start, len(g.history) }
+    return sizeof
 }

@@ -909,17 +909,27 @@ print_source_view :: proc(g: ^Godlex, file: ^Lex_File, start,end: Source_Pos) {
         file.path 
     )
     b := strings.builder_make(allocator=g.allocator)
-    strings.write_string(&b, "\x1b[31m") //RED
     for line_num in start.line..=end.line {
         line := get_line_text(file.data, line_num)
-        strings.write_string(&b, "\t")
-        for c, i in line {
-            column := i+1
-            strings.write_rune(&b, c)
+
+        lo := 0
+        hi := len(line)
+        if line_num == start.line {
+            lo = clamp(start.column-1, 0, len(line))
         }
+        if line_num == end.line {
+            hi = clamp(end.column, 0, len(line))
+        }
+        hi = max(hi,lo)
+
+        strings.write_string(&b, "\t")
+        strings.write_string(&b, line[:lo])
+        strings.write_string(&b, "\x1b[31m")
+        strings.write_string(&b, line[lo:hi])
+        strings.write_string(&b, "\x1b[0m")
+        strings.write_string(&b, line[hi:])
         strings.write_byte(&b, '\n')
     }
-    strings.write_string(&b, "\x1b[0m")
     fmt.print(strings.to_string(b))
 }
 

@@ -1,8 +1,21 @@
 
-layout A
+layout Vector2
     x: s64
     y: s64
 
-decl a = push A
-decl b = a + 8
-b.x
+forward alloc = def(size) do
+    if size == 0 do
+        return 0 as ptr
+    return 0 as ptr
+
+forward make_vector2 = def() do
+    decl new_vector2 = alloc(size_of Vector2) as Vector2
+    new_vector2.x = 0
+    new_vector2.y = 0
+    return new_vector2
+
+decl vec = make_vector2()
+vec.x = 69
+vec.y = 420
+
+

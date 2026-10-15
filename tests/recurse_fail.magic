@@ -4,7 +4,7 @@ layout A
 layout B
     next: A
 
-forward follow = fu(p, n) do
+forward follow = def(p, n) do
     if n == 0 do return 0
     return follow(p.next, n - 1)
 
