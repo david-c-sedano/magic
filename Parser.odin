@@ -314,7 +314,11 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Node(Wrapped) {
 
         case .KEYWORD:
             switch token.text {
-            case "true","false","none":
+            case "none":
+                lex.bad_token(g, token, "`none` is currently on the chopping block")
+                return nil
+
+            case "true","false":
                 lex.group(g)
                 leaf := new_node(Leaf, alloc=g.allocator)
                 leaf.token = token

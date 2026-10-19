@@ -226,4 +226,3 @@ sbprint :: proc(node: ^Node(Wrapped), b: ^strings.Builder, prefix := "") {
     fmt.printf("%v\n", node.kind)
     assert(false, "unknown AST_Kind in `sbprint`")
 }
-

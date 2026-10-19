@@ -12,6 +12,8 @@ import "core:flags"
 import win32 "core:sys/windows"
 
 main :: proc() {
+    // GC be like:
+    defer free_all(context.temp_allocator)
 
 	when ODIN_DEBUG {
 		track: mem.Tracking_Allocator
@@ -41,6 +43,7 @@ main :: proc() {
 
     Options :: struct {
         file: ^os.File `args:"pos=0,required,file=r" usage:"Input File."`,
+        out: string `args:"pos=1,required"usage:"Output File."`
     }
     opts: Options
     flags.parse_or_exit(&opts, os.args, .Odin)
@@ -93,4 +96,17 @@ main :: proc() {
         return
     }
     fmt.println("[MAGIC] we good, fam")
+
+    e: Emitter
+
+    init_emitter(&e, root, allocator=g.allocator)
+    owari_da := generate(&e, &c, root)
+    when ODIN_DEBUG {
+        fmt.println(owari_da)
+    }
+    _=os.write_entire_file(opts.out, transmute([]u8) owari_da)
+    delete(owari_da)
+
+    // qbe -t amd64_win -o <filename>.s <filename>.ssa
+    // gcc <filename>.s -o <filename>.exe
 }

@@ -273,7 +273,7 @@ my_vector.y = 69 // read past the "x" and write 69
 Note that you can still dereference pointers with no layout assigned. These fields belong to every `ptr` and dereferencing will obtain whatever is at the very beggining of the memory region.
 ```
 u8 u16 u32 u64 // zero extension, u8 will produce `byte`, the rest produce `int`
-s8 s16 s32 s64 // sign extension, s8 will produce `byte`, the rest produce `int`
+s8 s16 s32 s64 // sign extension, produces `int`
 float32 float64 // floating point value cast, produces `float` obviously
 ```
 

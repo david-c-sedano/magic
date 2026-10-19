@@ -141,7 +141,8 @@ RULES := #partial [AST_Kind][]Type_Rule {
         Bin_Type_Rule { Ptr, Int, Ptr },
         Bin_Type_Rule { Int, Ptr, Ptr },
         Bin_Type_Rule { Ptr, Ptr, Ptr },
-
+    },
+    .NEGATE = {
         Unary_Type_Rule { Int, Int },
         Unary_Type_Rule { Float, Float },
     },
@@ -352,17 +353,6 @@ local :: proc(scope: ^Scope, name: string) -> ^Entity {
         return entity
     }
     return nil
-}
-
-global :: proc(scope: ^Scope) -> ^Scope {
-    it := scope
-    for it != nil {
-        if it.parent == nil {
-            break
-        }
-        it = it.parent
-    }
-    return it
 }
 
 is_forward :: proc(decl: ^Node(Wrapped)) -> bool {
@@ -598,18 +588,18 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
     caller: ^Scope
     callee: ^Scope
     if call.scope == nil {
-        callee = c.scope
-        c.scope = global(c.scope)
-        caller = new(Scope, c.allocator) 
-        caller.symbols = make(map[string]^Entity, c.allocator)
-        caller.parent = lhs.template.scope
-        call.scope = caller
-        c.scope = callee // restore for now
+        caller = c.scope
+        callee = new(Scope, c.allocator) 
+        callee.symbols = make(map[string]^Entity, c.allocator)
+        callee.parent = lhs.template.scope
+        call.scope = callee
+        c.scope = caller // restore for now
     } else {
-        callee = c.scope
-        caller = call.scope
+        caller = c.scope
+        callee = call.scope
     }
 
+    call.instance.scope = callee
     for node,i in call.instance.params {
         param := node_cast(Leaf, node)
         arg := list.args[i]
@@ -621,14 +611,13 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
             if operand.mode == .INVALID {
                 return operand_of(call, .INVALID)
             }
-            if instantiate_parameter(c, param.token.text, caller, 
+            if instantiate_parameter(c, param.token.text, callee, 
                 wrap_node(param),arg
             ) == nil {
                 return operand_of(call, .INVALID)
             }
             continue
         }
-        // argument NOT supplied by caller, try default
         if default := node_cast(Bin_Expr, node); default != nil {
             if param := node_cast(Leaf, default.left); param != nil {
                 assert(default.kind == .ASSIGN)
@@ -636,27 +625,31 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
 
                 operand: Operand
                 decl: ^Node(Wrapped)
+                // argument NOT supplied by caller, try default
                 if arg == nil {
-                    c.scope = caller
-                    operand = infer_node(c, default.right)
                     c.scope = callee
+                    operand = infer_node(c, default.right)
+                    c.scope = caller
 
                     if operand.mode == .INVALID {
                         warn(c, "only global/const identifiers allowed in default args")
                         return operand_of(call, .INVALID)
                     }
-                    if instantiate_parameter(c, param.token.text, caller,
+                    if instantiate_parameter(c, param.token.text, callee,
                         wrap_node(default),default.right
                     ) == nil {
                         return operand_of(call, .INVALID)
                     }
                 } else {
-                    operand := infer_node(c, arg)
+                    // You have to mark this otherwise `finalize` will get pissed off
+                    // in this case, the instance's default value is not used, so just do this
+                    default.right.mode = .NO_VALUE
 
+                    operand := infer_node(c, arg)
                     if operand.mode == .INVALID {
                         return operand_of(call, .INVALID)
                     }
-                    if instantiate_parameter(c, param.token.text, caller,
+                    if instantiate_parameter(c, param.token.text, callee,
                         wrap_node(default),arg
                     ) == nil {
                         return operand_of(call, .INVALID)
@@ -682,7 +675,7 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
     c.current = &current
     defer c.current = current.prev
 
-    c.scope = caller
+    c.scope = callee
     outer := c.changed
     body := false
     for {
@@ -691,7 +684,7 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
         if operand.mode == .INVALID {
             bad_node(c, lhs.template, "failed to instantiate this")
             c.error_count -= 1 // count only 1 as error
-            c.scope = callee
+            c.scope = caller
             return operand_of(call, .INVALID)
         }
         do_it_again := c.changed
@@ -721,7 +714,7 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
     if call.constraints == {} {
         bad_node(c, lhs.template, "instantiation of this cannot produce a valid type")
         c.error_count -= 1 // only 1
-        c.scope = callee
+        c.scope = caller
         return operand_of(call, .INVALID)
     }
 
@@ -739,14 +732,14 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
     // but maybe not? it should be needed to do the whole inference shebang
     // since any instance may not match anything that has been generated...
     call.instance_hash = hash
-    c.scope = callee
+    c.scope = caller
     return operand_of(call, .RVALUE)
 }
 
 instantiate_parameter :: proc(
     c: ^Checker, 
     name: string,
-    caller: ^Scope,
+    callee: ^Scope,
     param,arg: ^Node(Wrapped)
 ) -> ^Entity {
     if !produces_value(arg.mode) {
@@ -754,12 +747,12 @@ instantiate_parameter :: proc(
         return nil
     }
 
-    entity := local(caller, name)
+    entity := local(callee, name)
     if entity == nil {
         entity = new(Entity,c.allocator)
         entity.constraints = arg.constraints
         entity.decl = wrap_node(param)
-        declare(caller, name, entity)
+        declare(callee, name, entity)
     } else if entity.decl != param {
         bad_node(c, param, "duplicate parameter `%s`", name)
         return nil
@@ -799,7 +792,7 @@ register_template_hash :: proc(c: ^Checker, template: ^Node(Function)) -> int {
 
 get_instance_hash :: proc(c: ^Checker, func: ^Node(Function), id: int) -> (Instance_Hash, bool) {
     b := strings.builder_make(c.allocator)
-    fmt.sbprintf(&b, "func_%d_", id)
+    fmt.sbprintf(&b, "instance_%d_", id)
 
     put_type_byte :: proc(b: ^strings.Builder, constraints: Unknown, layout_id:=0) -> bool {
         if card(constraints) != 1 {
@@ -989,7 +982,7 @@ seed :: proc(c: ^Checker, node: ^Node(Wrapped), toplevel := false) {
             if exists {
                 push.layout = layout
             } else {
-                bad_node(c, push, "type or layout in stack alloc does not exist")
+                bad_node(c, push, "layout in stack alloc does not exist")
             }
             push.mode = .RVALUE
             return
@@ -1001,7 +994,7 @@ seed :: proc(c: ^Checker, node: ^Node(Wrapped), toplevel := false) {
             if exists {
                 sizeof.layout = layout
             } else {
-                bad_node(c, sizeof, "type or layout in `size_of` does not exist")
+                bad_node(c, sizeof, "layout in `size_of` does not exist")
             }
             sizeof.mode = .RVALUE
             return
@@ -1045,7 +1038,8 @@ resolve_layout :: proc(c: ^Checker, layout: ^Layout_Info) -> bool {
         type_name := field.node.type
         size := 0
         switch type_name {
-        case "u8", "s8":  size = 1; field.result = .BYTE
+        case "u8": size = 1; field.result = .BYTE
+        case "s8": size = 1; field.result = .INT
         case "u16","s16": size = 2; field.result = .INT
         case "u32","s32": size = 4; field.result = .INT
         case "u64","s64": size = 8; field.result = .INT
@@ -1220,6 +1214,29 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
             if lhs.mode == .INVALID {
                 return operand_of(bin_expr, .INVALID) 
             }
+            // reject casts the code generator cannot do!
+            if card(lhs.constraints) == 1 {
+                switch {
+                case .BOOL in lhs.constraints && .PTR in bin_expr.constraints:
+                    bad_node(c, bin_expr, "why are u trying to cast `bool` to `ptr`")
+                    return operand_of(bin_expr, .INVALID)
+                case .BYTE in lhs.constraints && .PTR in bin_expr.constraints:
+                    bad_node(c, bin_expr, "why are u trying to cast `byte` to `ptr`")
+                    return operand_of(bin_expr, .INVALID)
+                case .FLOAT in lhs.constraints && .PTR in bin_expr.constraints:
+                    bad_node(c, bin_expr, "imagine directly casting casting `float` to `ptr`")
+                    return operand_of(bin_expr, .INVALID)
+                case .PTR in lhs.constraints && .BYTE in bin_expr.constraints:
+                    bad_node(c, bin_expr, "cannot cast `ptr` to `byte`. Just truncate it manually.")
+                    return operand_of(bin_expr, .INVALID)
+                case .PTR in lhs.constraints && .FLOAT in bin_expr.constraints:
+                    bad_node(c, bin_expr, 
+                        "im genuinely curious what use there is to casting `ptr` -> `float`"
+                    )
+                    return operand_of(bin_expr, .INVALID)
+                }
+            }
+
             return operand_of(bin_expr, .RVALUE)
         }
         if is_assign_op(bin_expr.kind) != .INVALID {
@@ -1302,7 +1319,8 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
                     }
 
                     if decl.rhs == nil {
-                        decl.constraints = Any
+                        bad_node(c, decl, "forward declaration must have initializer!")
+                        return operand_of(block, .INVALID)
                     } else {
                         decl.constraints = decl.rhs.constraints
                     }
@@ -1311,7 +1329,7 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
                     entity.constraints = decl.constraints
                     entity.decl = wrap_node(decl)
                     if exists := declare(c.scope, decl.name.text, entity); exists != nil {
-                        bad_node(c, node, "this is a redeclaration")
+                        bad_node(c, decl, "this is a redeclaration")
                         bad_node(c, exists.decl, "original is here")
                         c.error_count -= 1
                         return operand_of(block, .INVALID)
@@ -1661,9 +1679,10 @@ lvalue_check_and_dereference :: proc(c: ^Checker, deref: ^Node(Bin_Expr)) -> Ope
     result: Type
     builtin := true // HACK: allow "s64" and friends to go thru
     switch name {
-    case "u8","s8": 
+    case "u8": 
         result = .BYTE
-    case "u16","s16",
+    case "s8",
+         "u16","s16",
          "u32","s32",
          "u64","s64":
         result = .INT

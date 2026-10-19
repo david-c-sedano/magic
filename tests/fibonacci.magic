@@ -1,0 +1,9 @@
+
+decl result = fibonacci(10)
+result @exit
+
+forward fibonacci = def(n)
+    if n <= 1 do
+        return n
+    else
+        return fibonacci(n - 1) + fibonacci(n - 2)

@@ -1,0 +1,9 @@
+
+decl result = factorial(5)
+result @exit
+
+forward factorial = def(n)
+    if n <= 1 do
+        return 1
+    else 
+        return n * factorial(n - 1)

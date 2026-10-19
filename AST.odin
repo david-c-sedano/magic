@@ -85,7 +85,7 @@ AST_Kind :: enum {
     CONTINUE,
     BIN_EXPR,
     UNARY_EXPR,
-    PARAM_LIST,
+    ARG_LIST,
     BLOCK,
     IF_ELSE,
     WHILE,
@@ -179,7 +179,7 @@ init_kind_lookup :: proc "contextless" () {
     KIND_LOOKUP[Return] = { start=.RETURN }
     KIND_LOOKUP[Break] = { start=.BREAK }
     KIND_LOOKUP[Continue] = { start=.CONTINUE }
-    KIND_LOOKUP[Arg_List] = { start=.PARAM_LIST }
+    KIND_LOOKUP[Arg_List] = { start=.ARG_LIST }
     KIND_LOOKUP[Block] = { start=.BLOCK }
     KIND_LOOKUP[If_Else] = { start=.IF_ELSE }
     KIND_LOOKUP[While] = { start=.WHILE }
