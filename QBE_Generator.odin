@@ -13,8 +13,6 @@ Emitter :: struct {
     indents: int,
 
     terminated: bool,
-    exit: QBE_Operand,
-    has_exit: bool,
 
     next_temp: int,
     next_label: int,
@@ -24,6 +22,10 @@ Emitter :: struct {
     conts: [dynamic]string,
     current_scope: ^Scope,
     locals: map[^Node(Wrapped)]QBE_Operand,
+
+    types: strings.Builder,
+    types_cache: map[^Layout_Info]string,
+
     allocator: runtime.Allocator,
 }
 
@@ -45,7 +47,7 @@ QBE_Addr_Mode :: enum {
 }
 
 QBE_Type :: enum {
-    W,L,S,D // We Light Sour Deisel 
+    W,L,S,D
 }
 
 Access_Kind :: enum {
@@ -63,6 +65,8 @@ init_emitter :: proc(e: ^Emitter, root: ^Node(Wrapped), allocator := context.all
     assert(node_cast(Block, root) != nil)
     e.current_scope = root.scope
     e.locals = make(map[^Node(Wrapped)]QBE_Operand, allocator)
+    e.types = strings.builder_make(allocator)
+    e.types_cache = make(map[^Layout_Info]string, allocator)
     e.allocator = allocator
 
     e.out = &e.code
@@ -75,22 +79,12 @@ init_emitter :: proc(e: ^Emitter, root: ^Node(Wrapped), allocator := context.all
     e.indents = 1
 }
 
-// these helpers are important because they should be who "owns" the newline
 emit_instr :: proc(e: ^Emitter, line: string, args: ..any) {
     for i in 0 ..< e.indents {
         strings.write_string(e.out, "    ")
     }
     fmt.sbprintf(e.out, line, ..args)
     strings.write_byte(e.out, '\n')
-}
-
-emit_rdonly_string :: proc(e: ^Emitter, id: int, str: string) {
-    fmt.sbprintf(&e.data, "data $str_%d = {{ b ", id)
-    bites := transmute([]u8) str
-    for b in bites {
-        fmt.sbprintf(&e.data, "%d ", b)
-    }
-    fmt.sbprintf(&e.data, "0 }}\n")
 }
 
 emit_label :: proc(e: ^Emitter, id: int) {
@@ -226,122 +220,6 @@ emit_addr :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
     return {}
 }
 
-//TODO: fix this redundant garbage 
-emit_call_args :: proc(e: ^Emitter, call: ^Node(Bin_Expr)) -> string {
-    list := node_cast(Arg_List, call.right)
-    assert(list != nil)
-
-    caller_scope := e.current_scope
-    caller_locals := e.locals
-
-    default_locals := make(map[^Node(Wrapped)]QBE_Operand)
-    //copy map
-    for k,v in caller_locals {
-        default_locals[k]=v
-    }
-    defer {
-        e.current_scope = caller_scope
-        e.locals = caller_locals
-        delete(default_locals)
-    }
-
-    b := strings.builder_make(e.allocator)
-    for arg, i in list.args {
-        if i > 0 {
-            strings.write_string(&b, ", ")
-        }
-        param := call.instance.params[i]
-        value: QBE_Operand
-        if arg != nil {
-            // belong to caller
-            e.current_scope = caller_scope
-            e.locals = caller_locals
-            value = emit(e, arg)
-        } else {
-            default := node_cast(Bin_Expr, param)
-            assert(default != nil)
-            e.current_scope = call.instance.scope
-            e.locals = default_locals
-            value = emit(e, default.right)
-        }
-        e.locals = default_locals
-        local := new_local(e, resolved_type(param))
-        emit_store(e, local, value)
-        default_locals[param] = local
-        fmt.sbprintf(&b, "%s %s", qbe_type_string(qbe_type(param)), value.literal)
-    }
-    return strings.to_string(b)
-}
-
-emit_instance :: proc(e: ^Emitter, hash: Instance_Hash, instance: ^Node(Function)) {
-    old_out := e.out
-    old_scope := e.current_scope
-    old_locals := e.locals
-    old_breaks := e.breaks
-    old_conts := e.conts
-    old_terminated := e.terminated
-    old_temp := e.next_temp
-    old_label := e.next_label
-
-    defer {
-        e.out = old_out
-        e.current_scope = old_scope
-        e.locals = old_locals
-        e.breaks = old_breaks
-        e.conts = old_conts
-        e.terminated = old_terminated
-        e.next_temp = old_temp
-        e.next_label = old_label
-    }
-
-    e.current_scope = instance.scope
-    assert(e.current_scope != nil)
-    e.out = &e.instances
-    e.locals = make(map[^Node(Wrapped)]QBE_Operand, e.allocator)
-    e.breaks = make([dynamic]string, e.allocator)
-    e.conts = make([dynamic]string, e.allocator)
-    e.next_temp = 0
-    e.next_label = 0
-    e.terminated = false
-
-    if resolved_type(instance) == .NONE {
-        fmt.sbprintf(e.out, "function $%s(", hash)
-    } else {
-        fmt.sbprintf(e.out, "function %s $%s(", 
-            qbe_type_string(qbe_type(instance)), hash
-        )
-    }
-    for param, i in instance.params {
-        if i>0 {
-            fmt.sbprintf(e.out, ", ")
-        }
-        fmt.sbprintf(e.out, "%s %%arg%d",
-            qbe_type_string(qbe_type(param)), i
-        )
-    }
-    fmt.sbprintf(e.out, ") {{\n@start\n")
-    
-    for param, i in instance.params {
-        local := new_local(e, resolved_type(param))
-        e.locals[param] = local
-        incoming := new_temp(e, qbe_type(param))
-        incoming.literal = fmt.aprintf(
-            "%%arg%d", i, allocator=e.allocator
-        )
-        emit_store(e, local, incoming)
-    }
-
-    result := emit(e, instance.body)
-    if !e.terminated {
-        if resolved_type(instance) == .NONE {
-            emit_instr(e, "ret")
-        } else {
-            emit_instr(e, "ret %s", result.literal)
-        }
-    }
-    fmt.sbprintf(e.out, "}}\n")
-}
-
 new_label :: proc(e: ^Emitter) -> int {
     id := e.next_label
     e.next_label += 1
@@ -413,7 +291,90 @@ qbe_type_string :: proc(type: QBE_Type) -> string {
     case .S: return "s"
     case .D: return "d"
     }
-    return "wtf this is unreachable Odin is very anal about non `#partial` switch?"
+    //wtf this is unreachable Odin is very anal about non `#partial` switch?
+    return ""
+}
+
+ensure_qbe_type :: proc(e: ^Emitter, layout: ^Layout_Info) -> string {
+    if name, ok := e.types_cache[layout]; ok {
+        return name
+    }
+    name := fmt.aprintf(":magic_%s", layout.node.name, allocator=e.allocator)
+
+    needs_opaque :: proc(layout: ^Layout_Info) -> bool {
+        cursor := 0
+        natural_align := 1
+        for ast_field in layout.node.fields {
+            field := node_cast(Layout_Field, ast_field)
+            info := layout.fields[field.name]
+            // just don't invoke with layouts using `overlay` this is TODO
+            assert(!info.overlay)
+
+            a := min(info.size, 8)
+            if info.embed || info.use {
+                a = info.layout.align
+            }
+            cursor = cursor + (a - cursor % a) % a
+            if cursor != info.offset {
+                return true
+            }
+            cursor += info.size
+            natural_align = max(natural_align, a)
+        }
+        a := max(natural_align, layout.align)
+        expected := cursor + (a - cursor % a) % a
+        return expected != layout.size
+    }
+
+    // This probably doesn't take care of 100% of ABI crackpot cases
+    // the fact that someone can write an incorrect `invoke` though is part of the trust model
+    // as long as the tools are in place and the result makes sense, its fine
+    if needs_opaque(layout) {
+        fmt.sbprintf(&e.types, "type %s = align %d { %d }\n", 
+            name, layout.align, layout.size
+        )
+        e.types_cache[layout] = name
+        return name
+    }
+
+    b := strings.builder_make(e.allocator)
+    fmt.sbprintf(&b, "type %s = align %d {{ ", name, layout.align)
+    for ast_field, i in layout.node.fields {
+        field := node_cast(Layout_Field, ast_field)
+        info := layout.fields[field.name]
+        assert(!info.overlay)
+
+        field_type :: proc(e: ^Emitter, field: ^Field_Info) -> (string, int) {
+            if field.embed || field.use {
+                assert(field.layout != nil)
+                name := ensure_qbe_type(e, field.layout)
+                return name, field.layout.align 
+            }
+
+            switch field.node.type {
+            case "u8",  "s8":  return "b", 1
+            case "u16", "s16": return "h", 2
+            case "u32", "s32": return "w", 4
+            case "u64", "s64": return "l", 8
+            case "f32":        return "s", 4
+            case "f64":        return "d", 8
+            case:
+                assert(field.result == .PTR)
+                return "l", 8
+            }
+        }
+
+        type,_ := field_type(e, info)
+        if i > 0 {
+            strings.write_string(&b, ", ")
+        }
+        fmt.sbprintf(&b, "%s", type)
+    }
+
+    fmt.sbprintf(&b, " }}\n")
+    strings.write_string(&e.types, strings.to_string(b))
+    e.types_cache[layout] = name
+    return name
 }
 
 coerce :: proc(e: ^Emitter, value: QBE_Operand, source: Type, target: Type) -> QBE_Operand {
@@ -625,6 +586,7 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
         case .FLOAT:
             operand.mode = .IMM_FLOAT
             operand.type = .D
+            // TODO: maybe need more lossless representation
             operand.literal = fmt.aprintf("d_%f", leaf.token.as_float)
             return operand
         case .BYTE:
@@ -636,23 +598,23 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
         case .STR:
             id := e.next_rdonly
             e.next_rdonly += 1
-            emit_rdonly_string(e, id, leaf.token.as_str)
+            str := leaf.token.as_str
+
+            fmt.sbprintf(&e.data, "data $str_%d = {{ b ", id)
+            bites := transmute([]u8) str
+            for b in bites {
+                fmt.sbprintf(&e.data, "%d ", b)
+            }
+            fmt.sbprintf(&e.data, "0 }}\n")
+
             operand.mode = .GLOBAL
             operand.literal = fmt.aprintf("$str_%d", id)
             operand.type = .L
             operand.id = id
-            
-            if leaf.tag == "puts" {
-                emit_instr(e, "call $puts(l %s)", operand.literal)
-            }
             return operand
 
         case .IDENT:
             operand := emit_load(e, emit_addr(e, wrap_node(leaf)))
-            if type_is(leaf, .INT) && leaf.tag == "exit" {
-                e.exit = operand
-                e.has_exit = true
-            }
             return operand
         }
     }
@@ -724,8 +686,55 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
         if bin_expr.kind == .CALL {
             hash := bin_expr.instance_hash
             assert(hash != "")
-            args := emit_call_args(e, bin_expr)
 
+            //TODO: fix this redundant garbage 
+            call_args :: proc(e: ^Emitter, call: ^Node(Bin_Expr)) -> string {
+                list := node_cast(Arg_List, call.right)
+                assert(list != nil)
+
+                caller_scope := e.current_scope
+                caller_locals := e.locals
+
+                default_locals := make(map[^Node(Wrapped)]QBE_Operand)
+                //copy map
+                for k,v in caller_locals {
+                    default_locals[k]=v
+                }
+                defer {
+                    e.current_scope = caller_scope
+                    e.locals = caller_locals
+                    delete(default_locals)
+                }
+
+                b := strings.builder_make(e.allocator)
+                for arg, i in list.args {
+                    if i > 0 {
+                        strings.write_string(&b, ", ")
+                    }
+                    param := call.instance.params[i]
+                    value: QBE_Operand
+                    if arg != nil {
+                        // belong to caller
+                        e.current_scope = caller_scope
+                        e.locals = caller_locals
+                        value = emit(e, arg)
+                    } else {
+                        default := node_cast(Bin_Expr, param)
+                        assert(default != nil)
+                        e.current_scope = call.instance.scope
+                        e.locals = default_locals
+                        value = emit(e, default.right)
+                    }
+                    e.locals = default_locals
+                    local := new_local(e, resolved_type(param))
+                    emit_store(e, local, value)
+                    default_locals[param] = local
+                    fmt.sbprintf(&b, "%s %s", qbe_type_string(qbe_type(param)), value.literal)
+                }
+                return strings.to_string(b)
+            }
+
+            args := call_args(e, bin_expr)
             if type_is(bin_expr, .NONE) {
                 emit_instr(e, "call $%s(%s)", hash, args)
                 return {}
@@ -903,7 +912,17 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
 
     if push := node_cast(Push, node); push != nil {
         result := new_temp(e, .L)
-        emit_instr(e, "%s =l alloc8 %d", result.literal, max(push.layout.size, 1))
+        align := push.layout.align 
+        size := max(push.layout.size, 1)
+
+        opcode := "alloc4"
+        if align > 8 {
+            opcode = "alloc16"
+        } else if align > 4 {
+            opcode = "alloc8"
+        }
+
+        emit_instr(e, "%s =l %s %d", result.literal, opcode, size)
         return result
     }
 
@@ -924,7 +943,7 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
         if has_else {
             else_label = new_label(e)
         }
-        has_value := node.mode == .RVALUE
+        has_value := node.mode == .RVALUE && !type_is(if_else, .NONE)
 
         result: QBE_Operand
         if has_value {
@@ -1037,6 +1056,189 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
         return {}
     }
 
+    if invoke := node_cast(Invoke, node); invoke != nil {
+        ptr: QBE_Operand
+        if invoke.arg != nil {
+            ptr = emit(e, invoke.arg)
+            assert(ptr.type == .L)
+        }
+        name := invoke.foreign_proc_name
+
+        layout_to_args :: proc(e: ^Emitter, ptr: QBE_Operand, layout: ^Layout_Info) -> string {
+            b := strings.builder_make(e.allocator)
+
+            if layout == nil {
+                fmt.sbprintf(&b, "l %s", ptr.literal)
+                return strings.to_string(b) // ez
+            }
+
+            variadic := false
+            for field_node, i in layout.node.fields {
+                field := node_cast(Layout_Field, field_node)
+                info := layout.fields[field.name]
+                // TODO: I dont think this works for something like
+                // `printf("thing\n")`
+                // because printf is still variadic even though it gets no varargs
+                if field_node.tag == "varargs" {
+                    // this is actually a valid failure case in code gen BTW
+                    // im not joking
+                    assert(!variadic, "duplicate @varags")
+                    assert(i > 0, "variadic call needs fixed arguments")
+                    variadic = true
+                    strings.write_string(&b, ", ...")
+                }
+                if i > 0 || variadic {
+                    strings.write_string(&b, ", ")
+                }
+
+                assert(!info.overlay, "TODO")
+                if info.embed || info.use {
+                    nested := info.layout
+                    qbe_name := ensure_qbe_type(e, nested)
+
+                    addr := ptr
+                    if info.offset != 0 {
+                        addr = new_temp(e, .L)
+                        emit_instr(e, "%s =l add %s, %d", addr.literal, ptr.literal, info.offset)
+                    }
+
+                    fmt.sbprintf(&b, "%s %s", qbe_name, addr.literal)
+                    continue
+                }
+
+                addr := ptr
+                if info.offset != 0 {
+                    addr = new_temp(e, .L)
+                    emit_instr(e, "%s =l add %s, %d", addr.literal, ptr.literal, info.offset)
+                }
+
+                addr.mode = .ADDR
+                abi_type: string
+                switch field.type {
+                case "u8":
+                    addr.acc = .U8
+                    addr.type = .W
+                    abi_type = variadic ? "w" : "ub"
+                case "s8":
+                    addr.acc = .S8
+                    addr.type = .W
+                    abi_type = variadic ? "w" : "sb"
+                case "u16":
+                    addr.acc = .U16
+                    addr.type = .W
+                    abi_type = variadic ? "w" : "uh"
+                case "s16":
+                    addr.acc = .S16
+                    addr.type = .W
+                    abi_type = variadic ? "w" : "sh"
+                case "u32":
+                    addr.acc = .U32
+                    addr.type = .W
+                    abi_type = "w"
+                case "s32":
+                    addr.acc = .S32
+                    addr.type = .W
+                    abi_type = "w"
+                case "u64", "s64":
+                    addr.acc = .U64
+                    addr.type = .L
+                    abi_type = "l"
+                case "f32":
+                    addr.acc = .F32
+                    addr.type = .D
+                    abi_type = variadic ? "d" : "s"
+                case "f64":
+                    addr.acc = .F64
+                    addr.type = .D
+                    abi_type = "d"
+                case:
+                    // literally just a pointer
+                    // you'd need to use `embed` on "structs" defined within "structs"
+                    addr.acc = .PTR
+                    addr.type = .L
+                    abi_type = "l"
+                }
+
+                value := emit_load(e, addr)
+                // C default argument promotion float -> double
+                // `emit_load` is incredibly based, however
+                if field.type == "f32" && !variadic {
+                    single := new_temp(e, .S)
+                    emit_instr(e, "%s =%s truncd %s", single.literal, value.literal)
+                    value = single
+                }
+                fmt.sbprintf(&b, "%s %s", abi_type, value.literal)
+            }
+
+            return strings.to_string(b)
+        }
+
+        args: string
+        if invoke.arg != nil {
+            args = layout_to_args(e, ptr, invoke.arg.layout)
+            if type_is(invoke, .NONE) {
+                emit_instr(e, "call $%s(%s)", name, args)
+                return {}
+            }
+        } else {
+            if type_is(invoke, .NONE) {
+                emit_instr(e, "call $%s()", name)
+                return {}
+            }
+        }
+
+        type := invoke.type
+        assert(type != "")
+        abi_type := "l"
+        raw_type := QBE_Type.L
+        switch type {
+        case "u8":        abi_type = "ub"; raw_type = .W
+        case "s8":        abi_type = "sb"; raw_type = .W
+        case "u16":       abi_type = "uh"; raw_type = .W
+        case "s16":       abi_type = "sh"; raw_type = .W
+        case "u32","s32": abi_type = "w";  raw_type = .W
+        case "f32":       abi_type = "s";  raw_type = .S
+        case "f64":       abi_type = "d";  raw_type = .D
+        }
+
+        // struct return
+        if invoke.embed {
+            assert(invoke.layout != nil && type_is(invoke, .PTR))
+            qbe_name := ensure_qbe_type(e, invoke.layout)
+            result := new_temp(e, .L)
+            emit_instr(e, "%s =%s call $%s(%s)",
+                result.literal, qbe_name, name, args
+            )
+            return result
+        }
+
+        // scalar return
+        raw := new_temp(e, raw_type)
+        if invoke.arg != nil {
+            emit_instr(e, "%s =%s call $%s(%s)", raw.literal, abi_type, name, args)
+        } else {
+            emit_instr(e, "%s =%s call $%s()", raw.literal, abi_type, name)
+        }
+        opcode := ""
+        result_type := QBE_Type.L
+        switch type {
+        case "u8":  opcode = "extub"; result_type = .W 
+        case "s8":  opcode = "extsb" 
+        case "u16": opcode = "extuh" 
+        case "s16": opcode = "extsh" 
+        case "u32": opcode = "extuw" 
+        case "s32": opcode = "extsw" 
+        case "f32": opcode = "exts";  result_type = .D 
+        case: return raw
+        }
+
+        result := new_temp(e, result_type)
+        emit_instr(e, "%s =%s %s %s", 
+            result.literal, qbe_type_string(result_type), opcode, raw.literal
+        )
+        return result
+    }
+
     if func := node_cast(Function, node); func != nil {
         // you can 100% ignore these
         // past the checker stage they do nothing
@@ -1057,29 +1259,93 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
         return {}
     }
    
-    //TODO: literally everything else
     fmt.printf("%v\n", node.kind)
     assert(false, "unknown AST_Kind in `qbe.emit`")
     return {}
 }
 
-
 generate :: proc(e: ^Emitter, c: ^Checker, root: ^Node(Wrapped)) -> string {
     emit(e, root)
     if !e.terminated {
-        if e.has_exit {
-            emit_instr(e, "ret %s", e.exit.literal)
-        } else {
-            emit_instr(e, "ret 0")
-        }
+        emit_instr(e, "ret 0")
     }
     fmt.sbprintf(e.out, "}}\n")
+
+    emit_instance :: proc(e: ^Emitter, hash: Instance_Hash, instance: ^Node(Function)) {
+        old_out := e.out
+        old_scope := e.current_scope
+        old_locals := e.locals
+        old_breaks := e.breaks
+        old_conts := e.conts
+        old_terminated := e.terminated
+        old_temp := e.next_temp
+        old_label := e.next_label
+
+        defer {
+            e.out = old_out
+            e.current_scope = old_scope
+            e.locals = old_locals
+            e.breaks = old_breaks
+            e.conts = old_conts
+            e.terminated = old_terminated
+            e.next_temp = old_temp
+            e.next_label = old_label
+        }
+
+        e.current_scope = instance.scope
+        assert(e.current_scope != nil)
+        e.out = &e.instances
+        e.locals = make(map[^Node(Wrapped)]QBE_Operand, e.allocator)
+        e.breaks = make([dynamic]string, e.allocator)
+        e.conts = make([dynamic]string, e.allocator)
+        e.next_temp = 0
+        e.next_label = 0
+        e.terminated = false
+
+        if resolved_type(instance) == .NONE {
+            fmt.sbprintf(e.out, "function $%s(", hash)
+        } else {
+            fmt.sbprintf(e.out, "function %s $%s(", 
+                qbe_type_string(qbe_type(instance)), hash
+            )
+        }
+        for param, i in instance.params {
+            if i > 0 {
+                fmt.sbprintf(e.out, ", ")
+            }
+            fmt.sbprintf(e.out, "%s %%arg%d",
+                qbe_type_string(qbe_type(param)), i
+            )
+        }
+        fmt.sbprintf(e.out, ") {{\n@start\n")
+        
+        for param, i in instance.params {
+            local := new_local(e, resolved_type(param))
+            e.locals[param] = local
+            incoming := new_temp(e, qbe_type(param))
+            incoming.literal = fmt.aprintf(
+                "%%arg%d", i, allocator=e.allocator
+            )
+            emit_store(e, local, incoming)
+        }
+
+        result := emit(e, instance.body)
+        if !e.terminated {
+            if resolved_type(instance) == .NONE {
+                emit_instr(e, "ret")
+            } else {
+                emit_instr(e, "ret %s", result.literal)
+            }
+        }
+        fmt.sbprintf(e.out, "}}\n")
+    }
 
     for hash, instance in c.instances {
         emit_instance(e, hash, instance)
     }
 
     owari_da := strings.builder_make()
+    strings.write_string(&owari_da, strings.to_string(e.types))
     strings.write_string(&owari_da, strings.to_string(e.code))
     strings.write_string(&owari_da, strings.to_string(e.instances))
     strings.write_string(&owari_da, strings.to_string(e.data))

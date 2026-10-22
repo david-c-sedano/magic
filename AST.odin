@@ -92,6 +92,7 @@ AST_Kind :: enum {
     FUNCTION,
     LAYOUT_FIELD,
     LAYOUT,
+    INVOKE,
 }
 
 Wrapped :: struct{} 
@@ -151,6 +152,7 @@ Layout_Field :: struct {
 
 Layout :: struct {
     name: string,
+    align: int,
     fields: []^Node(Wrapped),
 }
 
@@ -160,6 +162,13 @@ Push :: struct {
 
 Size_Of :: struct {
     type: string,
+}
+
+Invoke :: struct {
+    foreign_proc_name: string,
+    arg: ^Node(Wrapped),
+    type: string,
+    embed: bool,
 }
 
 KIND_LOOKUP: map[typeid]struct{ start,end:AST_Kind }
@@ -186,6 +195,7 @@ init_kind_lookup :: proc "contextless" () {
     KIND_LOOKUP[Function] = { start=.FUNCTION }
     KIND_LOOKUP[Layout_Field] = { start=.LAYOUT_FIELD }
     KIND_LOOKUP[Layout] = { start=.LAYOUT }
+    KIND_LOOKUP[Invoke] = { start=.INVOKE }
     // kinds that map to MULTIPLE node types
     KIND_LOOKUP[Bin_Expr] = { .BIN_EXPR_BEGIN, .BIN_EXPR_END }
     KIND_LOOKUP[Unary_Expr] = { .UNARY_EXPR_BEGIN, .UNARY_EXPR_END }
@@ -252,6 +262,11 @@ pre_order_walk :: proc(node: ^Node(Wrapped), data: rawptr, visit: proc(^Node(Wra
         return
     }
     if field := node_cast(Layout_Field, node); field != nil {
+        return
+    }
+
+    if invoke := node_cast(Invoke, node); invoke != nil {
+        pre_order_walk(invoke.arg, data, visit)
         return
     }
 
@@ -348,6 +363,12 @@ post_order_walk :: proc(node: ^Node(Wrapped), data: rawptr, visit: proc(^Node(Wr
         return
     }
     if field := node_cast(Layout_Field, node); field != nil {
+        visit(node, data)
+        return
+    }
+
+    if invoke := node_cast(Invoke, node); invoke != nil {
+        post_order_walk(invoke.arg, data, visit)
         visit(node, data)
         return
     }
@@ -468,6 +489,12 @@ copy_node_recursively :: proc(node: ^Node(Wrapped), allocator := context.allocat
     }
     if field := node_cast(Layout_Field, node); field != nil {
         return wrap_node(copy_node(field))
+    }
+
+    if invoke := node_cast(Invoke, node); invoke != nil {
+        new_invoke := copy_node(invoke)
+        new_invoke.arg = copy_node_recursively(invoke.arg)
+        return wrap_node(new_invoke)
     }
 
     if ret := node_cast(Return, node); ret != nil {

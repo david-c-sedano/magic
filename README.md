@@ -5,13 +5,15 @@ This is my custom programming language/compiler. Currently work in progress.
 # TODO:
 Code generation is finished! The gap between a usable, polished language and I what I currently have, though, is massive! 
 
-1. `invoke`
-2. figure out subscripting
-3. start writing stdlib
-4. write more tests!
-5. kill all the bugs (always doing this!)
+1. I think `fizzbuzz.magic` blows up the stack, fix immediately
+2. start writing stdlib
+3. figure out subscripting
+4. better codegen "error" messages (more like developer embarassment)
+5. write more tests/examples!
 
 # note about `invoke`
+I need to add this to the spec. This kind of a huge feature.
+
 I am going to hate myself trying to observe what my program does by shoehorning in a bunch of hacks with the tags (like `@exit` or `@puts`) so I will begin with C interop because this is the sad state of computers atm
 
 somthing like `extern` makes little sense to me because function calls in Magic are very abstract and inferential. What makes more sense is something like

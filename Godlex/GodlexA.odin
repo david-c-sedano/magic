@@ -150,7 +150,9 @@ KEYWORDS := [?]string {
     "def",
     "return",
     "layout",
+    "align",
     "embed",
     "overlay",
     "using",
+    "invoke",
 }

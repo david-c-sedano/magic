@@ -55,6 +55,21 @@ parse_layout :: proc(g: ^lex.Godlex) -> ^Node(Layout) {
         return nil
     }
 
+    lex.snapshot(g)
+    mayb_align := lex.group(g)
+    align := 1
+    if mayb_align.kind == .KEYWORD && mayb_align.text == "align" {
+        lex.commit(g)
+        n := lex.group(g, .INT)
+        if n.kind == .INVALID {
+            lex.bad_token(g, n, "expected an integer after `align`")
+            return nil
+        }
+        align = n.as_int
+    } else {
+        lex.restore(g)
+    }
+
     fields := make([dynamic]^Node(Wrapped), g.allocator)
     next := lex.group_ahead(g,1)
     if !next.newline {
@@ -92,6 +107,7 @@ parse_layout :: proc(g: ^lex.Godlex) -> ^Node(Layout) {
     }
     layout := new_node(Layout, alloc=g.allocator)
     layout.name = name.text
+    layout.align = align
     layout.fields = fields[:]
     layout.span = { span_start, len(g.history) } 
     return layout
@@ -369,6 +385,13 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Node(Wrapped) {
                     return nil
                 }
                 return wrap_node(sizeof)
+
+            case "invoke":
+                invoke := parse_invoke(g)
+                if lex.has_error(g) {
+                    return nil
+                }
+                return wrap_node(invoke)
             }
         }
 
@@ -726,4 +749,57 @@ parse_size_of :: proc(g: ^lex.Godlex) -> ^Node(Size_Of) {
     sizeof.type = type.text
     sizeof.span = { span_start, len(g.history) }
     return sizeof
+}
+
+parse_invoke :: proc(g: ^lex.Godlex) -> ^Node(Invoke) {
+    span_start := len(g.history)
+    invoke_keyw := lex.group(g, .KEYWORD)
+    colon := lex.group(g, .COLON)
+    if colon.kind == .INVALID {
+        lex.bad_token(g, colon, "expected a colon immediately after `invoke`")
+        return nil
+    }
+    foreign_proc_name := lex.group(g, .IDENT)
+    if foreign_proc_name.kind == .INVALID {
+        lex.bad_token(g, foreign_proc_name, "expected an identifier in `invoke` expr")
+        return nil
+    }
+    invoke := new_node(Invoke, alloc=g.allocator)
+    invoke.foreign_proc_name = foreign_proc_name.text
+
+    lex.snapshot(g)
+    mayb_none := lex.group(g)
+    if mayb_none.kind == .KEYWORD && mayb_none.text == "none" {
+        lex.commit(g)
+        invoke.arg = nil
+    } else {
+        lex.restore(g)
+        invoke.arg = parse_expr(g)
+        if lex.has_error(g) {
+            return nil
+        }
+    }
+
+    // man `invoke` has all kinds of annoying optional forms
+    maybe_embed := lex.group_ahead(g,1)
+    if maybe_embed.kind == .KEYWORD && maybe_embed.text == "embed" {
+        lex.group(g)
+        invoke.embed = true
+    }
+
+    maybe_as := lex.group_ahead(g,1)
+    if maybe_as.kind == .KEYWORD && maybe_as.text == "as" {
+        lex.group(g)
+        type_name := lex.group(g, .IDENT)
+        if type_name.kind == .INVALID {
+            lex.bad_token(g, type_name, 
+                "expected an identifier after `as` in `invoke` expr"
+            )
+            return nil
+        }
+        invoke.type = type_name.text
+    }
+   
+    invoke.span = { span_start, len(g.history) }
+    return invoke
 }

@@ -205,7 +205,11 @@ sbprint :: proc(node: ^Node(Wrapped), b: ^strings.Builder, prefix := "") {
     }
 
     if layout := node_cast(Layout, node); layout != nil {
-        fmt.sbprintf(b, "layout %s\n", layout.name)
+        if layout.align == 1 {
+            fmt.sbprintf(b, "layout %s\n", layout.name)
+        } else {
+            fmt.sbprintf(b, "layout %s aligned %d\n", layout.name, layout.align)
+        }
 
         for node, i in layout.fields {
             is_last := i == len(layout.fields) - 1
@@ -218,6 +222,27 @@ sbprint :: proc(node: ^Node(Wrapped), b: ^strings.Builder, prefix := "") {
                 next_prefix = strings.join({prefix, "    "},"")
             }
             sbprint(node, b, next_prefix)
+            delete(next_prefix)
+        }
+        return
+    }
+
+    if invoke := node_cast(Invoke, node); invoke != nil {
+        if invoke.embed {
+            fmt.sbprintf(b, "embed ")
+        }
+        if invoke.type == "" {
+            fmt.sbprintf(b, "invoke %s\n", invoke.foreign_proc_name)
+        } else {
+            fmt.sbprintf(b, "invoke %s as %s\n", invoke.foreign_proc_name, invoke.type)
+        }
+
+        if invoke.arg == nil {
+            fmt.sbprintf(b, "%└───none\n", prefix)
+        } else {
+            fmt.sbprintf(b, "%s%s", prefix, "└───")
+            next_prefix := strings.join({prefix, "    "},"")
+            sbprint(invoke.arg, b, next_prefix)
             delete(next_prefix)
         }
         return

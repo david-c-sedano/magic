@@ -24,7 +24,7 @@ Operand :: struct {
 }
 
 Layout_Info :: struct {
-    size: int,
+    size,align: int,
     fields: map[string]^Field_Info,
     resolving,done: bool,
     node: ^Node(Layout),
@@ -969,6 +969,8 @@ seed :: proc(c: ^Checker, node: ^Node(Wrapped), toplevel := false) {
                         bin_expr.layout = layout
                     } else {
                         bad_node(c, bin_expr, "type or layout in cast does not exist")
+                        type.mode = .INVALID
+                        return
                     }
                 }
                 type.mode = .NO_VALUE
@@ -983,6 +985,13 @@ seed :: proc(c: ^Checker, node: ^Node(Wrapped), toplevel := false) {
                 push.layout = layout
             } else {
                 bad_node(c, push, "layout in stack alloc does not exist")
+                push.mode = .INVALID
+                return
+            }
+            if push.layout.align > 16 {
+                bad_node(c, push, "alignment of 32 or more is not allowed in `push`")
+                push.mode = .INVALID
+                return
             }
             push.mode = .RVALUE
             return
@@ -995,6 +1004,8 @@ seed :: proc(c: ^Checker, node: ^Node(Wrapped), toplevel := false) {
                 sizeof.layout = layout
             } else {
                 bad_node(c, sizeof, "layout in `size_of` does not exist")
+                sizeof.mode = .INVALID
+                return
             }
             sizeof.mode = .RVALUE
             return
@@ -1007,6 +1018,54 @@ seed :: proc(c: ^Checker, node: ^Node(Wrapped), toplevel := false) {
             // non-instance functions are generic no matter what
             pre_order_walk(node, nil, insane_nested_visitor)
             func.mode = .TEMPLATE
+            return
+        }
+
+        if invoke := node_cast(Invoke, node); invoke != nil {
+            if invoke.type == "" {
+                if invoke.embed {
+                    bad_node(c, invoke, "cannot embed a foreign call that returns `void`")
+                    invoke.mode = .INVALID
+                    return
+                }
+                invoke.constraints += None
+                return
+            } else {
+                if invoke.embed {
+                    _,exists := c.layouts[invoke.type]
+                    if !exists {
+                        bad_node(c, invoke, "`embed` requires a layout return type")
+                        invoke.mode = .INVALID
+                        return
+                    }
+                }
+
+                switch invoke.type {
+                case "u8":  
+                    invoke.constraints += Byte
+                    return
+                case "s8","s16","s32","s64",
+                     "u16","u32","u64":
+                    invoke.constraints += Int
+                    return
+                case "f32","f64": 
+                    invoke.constraints += Float 
+                    return
+                case "ptr":
+                    invoke.constraints += Ptr 
+                    return
+                }
+
+                layout,exists := c.layouts[invoke.type]
+                if exists {
+                    invoke.constraints += Ptr 
+                    invoke.layout = layout
+                } else {
+                    bad_node(c, invoke, "layout in `invoke` does not exist")
+                    invoke.mode = .INVALID
+                    return
+                }
+            }
             return
         }
 
@@ -1030,7 +1089,6 @@ resolve_layout :: proc(c: ^Checker, layout: ^Layout_Info) -> bool {
     counter := 0
     group_offset := 0
     group_size := 0
-
     for ast_field in layout.node.fields {
         field_node := node_cast(Layout_Field, ast_field)
         assert(field_node != nil)
@@ -1079,6 +1137,59 @@ resolve_layout :: proc(c: ^Checker, layout: ^Layout_Info) -> bool {
         field.offset = group_offset
     }
 
+    // democracy is dead
+    align := layout.node.align
+    if align < 1 || (align & (align - 1) != 0) {
+        bad_node(c, layout.node, "alignment is not a positive power of two")
+        return false
+    } 
+
+    if align != 1 {
+        cursor := 0
+        group_start := 0
+        group_align := 1
+        group_size := 0
+        n := len(layout.node.fields)
+
+        for i in 0..<n+1 {
+            at_end := i == n
+            starts := false
+            if !at_end {
+                field := node_cast(Layout_Field, layout.node.fields[i])
+                starts = !field.overlay
+            }
+
+            if i > 0 && (at_end || starts) {
+                cursor = (cursor + group_align - 1) & ~(group_align - 1)
+                for j in group_start..<i {
+                    field := node_cast(Layout_Field, layout.node.fields[j])
+                    layout.fields[field.name].offset = cursor
+                }
+                cursor += group_size
+                align = max(align, group_align)
+                group_start = i
+                group_align = 1
+                group_size = 0
+            }
+            if at_end {
+                break
+            }
+
+            field := node_cast(Layout_Field, layout.node.fields[i])
+            info := layout.fields[field.name]
+            a := min(info.size, 8)
+            if info.embed || info.use {
+                a = info.layout.align
+            }
+            group_align = max(group_align, a)
+            group_size = max(group_size, info.size)
+        }
+        layout.size = (cursor + align - 1) & ~(align - 1) 
+    } else {
+        layout.size = counter + group_size
+    }
+    layout.align = align
+
     // promote 'using` fields
     for ast_field in layout.node.fields {
         field_node := node_cast(Layout_Field, ast_field)
@@ -1110,9 +1221,6 @@ resolve_layout :: proc(c: ^Checker, layout: ^Layout_Info) -> bool {
         }
     }
 
-    // NO PADDING!!! IMAGINE LYING TO THE PROGRAMMER
-    // if you want padding do ts manually
-    layout.size = counter + group_size
     layout.done = true
     return true
 }
@@ -1597,6 +1705,28 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
             return operand_of(cont, .INVALID)
         }
         return operand_of(cont, .NO_VALUE)
+    }
+
+    if invoke := node_cast(Invoke, node); invoke != nil  {
+        if invoke.arg == nil {
+            return operand_of(invoke, .RVALUE)
+        }
+
+        operand := infer_node(c, invoke.arg)
+        if operand.mode == .INVALID {
+            return operand_of(invoke, .INVALID)
+        }
+        common := invoke.arg.constraints & Ptr
+        if common == {} {
+            bad_node(c, invoke.arg, "argument in `invoke` must be a pointer")
+            return operand_of(invoke, .INVALID)
+        }
+        if common != invoke.arg.constraints {
+            c.changed = true
+        }
+        invoke.arg.constraints = common
+
+        return operand_of(invoke, .RVALUE)
     }
     
     fmt.println(node.kind)
