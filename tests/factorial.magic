@@ -1,9 +1,19 @@
 
+
 decl result = factorial(5)
-result @exit
+exit(result)
 
 forward factorial = def(n)
     if n <= 1 do
         return 1
     else 
         return n * factorial(n - 1)
+
+// annoying
+layout _libcArgs_Exit align 8
+    status: s32
+
+forward exit = def(status) do
+    decl args = push _libcArgs_Exit
+    args.status = status
+    invoke:exit args
