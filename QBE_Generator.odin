@@ -235,36 +235,6 @@ new_temp :: proc(e: ^Emitter, type: QBE_Type) -> QBE_Operand {
     return operand
 }
 
-new_local :: proc(e: ^Emitter, t: Type) -> QBE_Operand {
-    addr := new_temp(e, .L)
-    size := 8
-    if t == .BYTE || t == .BOOL {
-        size = 1
-    }
-    emit_instr(e, "%s =l alloc8 %d", addr.literal, size)
-    
-    operand: QBE_Operand
-    operand.mode = .ADDR
-
-    if t == .BYTE || t == .BOOL {
-        operand.type = .W
-    } else if t == .FLOAT {
-        operand.type = .D
-    } else {
-        operand.type = .L
-    }
-
-    switch t {
-    case .INT:   operand.acc = .S64
-    case .FLOAT: operand.acc = .F64
-    case .PTR:   operand.acc = .PTR
-    case .BOOL, .BYTE: operand.acc = .U8
-    case .NONE: assert(false, "trying to allocate for `none`?")
-    }
-    operand.literal = addr.literal
-    return operand
-}
-
 qbe_type :: proc(node: ^Node($T)) -> QBE_Type {
     assert(card(node.constraints)==1, "checker just crapped the bed")
 
@@ -607,7 +577,26 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
             return operand
 
         case .IDENT:
-            operand := emit_load(e, emit_addr(e, wrap_node(leaf)))
+            // same type operation as `emit_addr` but not rly
+            find :: proc(e: ^Emitter, leaf: ^Node(Leaf)) -> QBE_Operand {
+                scope := e.current_scope
+                for scope != nil {
+                    entity := lookup(scope, leaf)
+                    if entity != nil {
+                        if operand, ok := e.locals[entity.decl]; ok {
+                            return operand
+                        }
+                    }
+                    scope = scope.parent
+                }
+                assert(false, "no local??")
+                return {}
+            }
+
+            operand := find(e, leaf)
+            if operand.mode == .ADDR {
+                operand = emit_load(e, operand)
+            }
             return operand
         }
     }
@@ -714,9 +703,7 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
                         value = emit(e, default.right)
                     }
                     e.locals = default_locals
-                    local := new_local(e, resolved_type(param))
-                    emit_store(e, local, value)
-                    default_locals[param] = local
+                    default_locals[param] = value
                     fmt.sbprintf(&b, "%s %s", qbe_type_string(qbe_type(param)), value.literal)
                 }
                 return strings.to_string(b)
@@ -1273,6 +1260,36 @@ allocate_stack_memory :: proc(e: ^Emitter, body: ^Node(Wrapped)) {
                 return
             }
 
+            new_local :: proc(e: ^Emitter, t: Type) -> QBE_Operand {
+                addr := new_temp(e, .L)
+                size := 8
+                if t == .BYTE || t == .BOOL {
+                    size = 1
+                }
+                emit_instr(e, "%s =l alloc8 %d", addr.literal, size)
+                
+                operand: QBE_Operand
+                operand.mode = .ADDR
+
+                if t == .BYTE || t == .BOOL {
+                    operand.type = .W
+                } else if t == .FLOAT {
+                    operand.type = .D
+                } else {
+                    operand.type = .L
+                }
+
+                switch t {
+                case .INT:   operand.acc = .S64
+                case .FLOAT: operand.acc = .F64
+                case .PTR:   operand.acc = .PTR
+                case .BOOL, .BYTE: operand.acc = .U8
+                case .NONE: assert(false, "trying to allocate for `none`?")
+                }
+                operand.literal = addr.literal
+                return operand
+            }
+
             slot := new_local(e, resolved_type(decl))
             e.stack_slots[node] = slot
             if decl.forward {
@@ -1344,13 +1361,11 @@ generate :: proc(e: ^Emitter, c: ^Checker, root: ^Node(Wrapped)) -> string {
         }
         fmt.sbprintf(e.out, ") {{\n@start\n")
         for param, i in instance.params {
-            local := new_local(e, resolved_type(param))
-            e.locals[param] = local
-            incoming := new_temp(e, qbe_type(param))
-            incoming.literal = fmt.aprintf(
-                "%%arg%d", i, allocator=e.allocator
-            )
-            emit_store(e, local, incoming)
+            incoming: QBE_Operand
+            incoming.mode = .TEMP
+            incoming.type = qbe_type(param)
+            incoming.literal = fmt.aprintf("%%arg%d", i, allocator=e.allocator)
+            e.locals[param] = incoming
         }
         allocate_stack_memory(e, instance.body)
 

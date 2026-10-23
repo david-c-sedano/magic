@@ -5,8 +5,8 @@ This is my custom programming language/compiler. Currently work in progress.
 # TODO:
 Code generation is finished! The gap between a usable, polished language and I what I currently have, though, is massive! 
 
-1. default argument still leaks stack memory
-2. start writing stdlib
+1. start writing stdlib
+2. figure out how to return """"structs"""" (not really structs)
 3. figure out subscripting
 4. better codegen "error" messages (more like developer embarassment)
 5. write more tests/examples!

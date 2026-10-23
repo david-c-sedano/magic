@@ -757,6 +757,7 @@ instantiate_parameter :: proc(
         bad_node(c, param, "duplicate parameter `%s`", name)
         return nil
     }
+    entity.mode = .CONST
 
     if entity.layout != arg.layout {
         entity.layout = arg.layout
@@ -1302,7 +1303,7 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
             leaf.constraints = common
             entity.constraints = common
             entity.decl.constraints = common
-            if is_forward(entity.decl) {
+            if is_forward(entity.decl) || entity.mode == .CONST {
                 leaf.mode = .CONST
             } else {
                 leaf.mode = .LVALUE
@@ -1740,7 +1741,7 @@ lvalue_check_and_assign :: proc(c: ^Checker, assign: ^Node(Bin_Expr)) -> Operand
         return operand_of(assign, .INVALID) 
     }
     if lhs.mode == .CONST {
-        bad_node(c, assign.left, "cannot assign to constant (or symbols declared via `forward`)")
+        bad_node(c, assign.left, "cannot assign to constant (`forward` variables or parameters)")
         return operand_of(assign, .INVALID) 
     }
     if lhs.mode != .LVALUE {
