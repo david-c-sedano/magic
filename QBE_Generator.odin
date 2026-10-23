@@ -22,6 +22,7 @@ Emitter :: struct {
     conts: [dynamic]string,
     current_scope: ^Scope,
     locals: map[^Node(Wrapped)]QBE_Operand,
+    stack_slots: map[^Node(Wrapped)]QBE_Operand,
 
     types: strings.Builder,
     types_cache: map[^Layout_Info]string,
@@ -65,6 +66,7 @@ init_emitter :: proc(e: ^Emitter, root: ^Node(Wrapped), allocator := context.all
     assert(node_cast(Block, root) != nil)
     e.current_scope = root.scope
     e.locals = make(map[^Node(Wrapped)]QBE_Operand, allocator)
+    e.stack_slots = make(map[^Node(Wrapped)]QBE_Operand, allocator)
     e.types = strings.builder_make(allocator)
     e.types_cache = make(map[^Layout_Info]string, allocator)
     e.allocator = allocator
@@ -150,8 +152,6 @@ emit_addr :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
     assert(node.mode == .LVALUE || (node.kind == .DEREFERENCE && node.mode == .RVALUE))
 
     if leaf := node_cast(Leaf, node); leaf != nil {
-        assert(leaf.token.kind == .IDENT)
-
         scope := e.current_scope
         for scope != nil {
             entity := lookup(scope, leaf)
@@ -167,11 +167,9 @@ emit_addr :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
 
     if node.kind == .DEREFERENCE {
         deref := node_cast(Bin_Expr, node)
-        assert(deref != nil)
 
         base := emit(e, deref.left)
         right := node_cast(Leaf, deref.right)
-        assert(right != nil)
         name := right.token.text
         offset := 0
         acc_name := name
@@ -185,7 +183,6 @@ emit_addr :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
         case:
             layout := deref.left.layout
             field, ok := layout.fields[name]
-            assert(ok)
             offset = field.offset
             acc_name = field.node.type
         }
@@ -346,7 +343,6 @@ ensure_qbe_type :: proc(e: ^Emitter, layout: ^Layout_Info) -> string {
 
         field_type :: proc(e: ^Emitter, field: ^Field_Info) -> (string, int) {
             if field.embed || field.use {
-                assert(field.layout != nil)
                 name := ensure_qbe_type(e, field.layout)
                 return name, field.layout.align 
             }
@@ -380,7 +376,6 @@ ensure_qbe_type :: proc(e: ^Emitter, layout: ^Layout_Info) -> string {
 coerce :: proc(e: ^Emitter, value: QBE_Operand, source: Type, target: Type) -> QBE_Operand {
     // POINTERS ARE JUST NUMBERS XD
     if (source == .INT && target == .PTR) || (source == .PTR && target == .INT) {
-        assert(value.type == .L)
         return value
     }
 
@@ -575,8 +570,6 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
                 operand.literal = "0"
                 return operand
             }
-            fmt.println(leaf.token.text)
-            assert(false,"not sure what other keyword is a leaf")
 
         case .INT:
             operand.mode = .IMM_INT
@@ -685,13 +678,9 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
         // case 4: instances/`CALL`s
         if bin_expr.kind == .CALL {
             hash := bin_expr.instance_hash
-            assert(hash != "")
 
-            //TODO: fix this redundant garbage 
-            call_args :: proc(e: ^Emitter, call: ^Node(Bin_Expr)) -> string {
+            default_args :: proc(e: ^Emitter, call: ^Node(Bin_Expr)) -> string {
                 list := node_cast(Arg_List, call.right)
-                assert(list != nil)
-
                 caller_scope := e.current_scope
                 caller_locals := e.locals
 
@@ -720,7 +709,6 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
                         value = emit(e, arg)
                     } else {
                         default := node_cast(Bin_Expr, param)
-                        assert(default != nil)
                         e.current_scope = call.instance.scope
                         e.locals = default_locals
                         value = emit(e, default.right)
@@ -734,12 +722,39 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
                 return strings.to_string(b)
             }
 
-            args := call_args(e, bin_expr)
+            call_args :: proc(e: ^Emitter, call: ^Node(Bin_Expr)) -> string {
+                list := node_cast(Arg_List, call.right)
+                b := strings.builder_make(e.allocator)
+
+                for arg, i in list.args {
+                    if i > 0 {
+                        strings.write_string(&b, ", ")
+                    }
+                    value := emit(e, arg)
+                    param := call.instance.params[i]
+                    fmt.sbprintf(&b, "%s %s", qbe_type_string(qbe_type(param)), value.literal)
+                }
+                return strings.to_string(b)
+            }
+
+            list := node_cast(Arg_List, bin_expr.right)
+            has_defaults := false
+            for arg, i in list.args {
+                if arg == nil {
+                    has_defaults = true
+                }
+            }
+            args: string
+            if has_defaults {
+                args = default_args(e, bin_expr)
+            } else {
+                args = call_args(e, bin_expr)
+            }
+
             if type_is(bin_expr, .NONE) {
                 emit_instr(e, "call $%s(%s)", hash, args)
                 return {}
             }
-
             result := new_temp(e, qbe_type(bin_expr))
             emit_instr(e, "%s =%s call $%s(%s)",
                 result.literal, qbe_type_string(result.type), hash, args
@@ -845,7 +860,7 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
             // checker actually allows this
             // this just means the declaration is not used or is a template
             if decl.rhs != nil {
-                /*  `emit` still may be able to do something useful
+                /*  a declaration like this still might have side effects though
                     example:
                     ```
                     decl why_would_anyone_do_this = do
@@ -853,17 +868,9 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
                         def() 
                             "deez_nuts"
                     ```
+                    so this `emit` prolly necessary
                 */
                 emit(e, decl.rhs)
-            }
-            return {}
-        }
-        if decl.forward {
-            if decl.rhs != nil {
-                value := emit(e, decl.rhs)
-                local, ok := e.locals[node]
-                assert(ok, "no stack slot for `forward`?")
-                emit_store(e, local, value)
             }
             return {}
         }
@@ -874,7 +881,8 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
         if decl.rhs != nil {
             value = emit(e, decl.rhs)
         }
-        local := new_local(e, resolved_type(decl))
+        local, ok := e.stack_slots[node]
+        assert(ok, "decl has no stack slot?")
         e.locals[node] = local
         if decl.rhs != nil && decl.rhs.mode != .TEMPLATE {
             emit_store(e, local, value)
@@ -886,19 +894,6 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
         result: QBE_Operand
         prev := e.current_scope
         e.current_scope = block.scope
-        // resolve forwards
-        for child in block.code {
-            if decl := node_cast(Decl, child); decl != nil {
-                if !decl.forward {
-                    continue
-                }
-                if card(decl.constraints) != 1 {
-                    // is template or w/e
-                    continue
-                }
-                e.locals[child] = new_local(e, resolved_type(decl))
-            }
-        }
 
         for child in block.code {
             if e.terminated {
@@ -911,19 +906,9 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
     }
 
     if push := node_cast(Push, node); push != nil {
-        result := new_temp(e, .L)
-        align := push.layout.align 
-        size := max(push.layout.size, 1)
-
-        opcode := "alloc4"
-        if align > 8 {
-            opcode = "alloc16"
-        } else if align > 4 {
-            opcode = "alloc8"
-        }
-
-        emit_instr(e, "%s =l %s %d", result.literal, opcode, size)
-        return result
+        slot, ok := e.stack_slots[node]
+        assert(ok, "no stack slot?")
+        return slot 
     }
 
     if sizeof := node_cast(Size_Of, node); sizeof != nil {
@@ -1060,7 +1045,6 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
         ptr: QBE_Operand
         if invoke.arg != nil {
             ptr = emit(e, invoke.arg)
-            assert(ptr.type == .L)
         }
         name := invoke.foreign_proc_name
 
@@ -1188,7 +1172,6 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
         }
 
         type := invoke.type
-        assert(type != "")
         abi_type := "l"
         raw_type := QBE_Type.L
         switch type {
@@ -1203,7 +1186,6 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
 
         // struct return
         if invoke.embed {
-            assert(invoke.layout != nil && type_is(invoke, .PTR))
             qbe_name := ensure_qbe_type(e, invoke.layout)
             result := new_temp(e, .L)
             emit_instr(e, "%s =%s call $%s(%s)",
@@ -1264,7 +1246,47 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
     return {}
 }
 
+allocate_stack_memory :: proc(e: ^Emitter, body: ^Node(Wrapped)) {
+
+    visit :: proc(node: ^Node(Wrapped), data: rawptr) {
+        // `generic` means it's marked under a `def` template 
+        if node.generic {
+            return
+        }
+        e := cast(^Emitter) data
+
+        if push := node_cast(Push, node); push != nil {
+            slot := new_temp(e, .L) 
+            opcode := "alloc4"
+            if push.layout.align > 8 {
+                opcode = "alloc16"
+            } else if push.layout.align > 4 {
+                opcode = "alloc8"
+            }
+            emit_instr(e, "%s =l %s %d", slot.literal, opcode, max(push.layout.size, 1))
+            e.stack_slots[node] = slot
+        }
+
+        if decl := node_cast(Decl, node); decl != nil {
+            if card(decl.constraints) != 1 {
+            // assigned to some stupid compiler-time thing
+                return
+            }
+
+            slot := new_local(e, resolved_type(decl))
+            e.stack_slots[node] = slot
+            if decl.forward {
+                e.locals[node] = slot
+            }
+            return
+        }
+    }
+
+    pre_order_walk(body, cast(rawptr) e, visit)
+}
+
 generate :: proc(e: ^Emitter, c: ^Checker, root: ^Node(Wrapped)) -> string {
+    allocate_stack_memory(e, root)
     emit(e, root)
     if !e.terminated {
         emit_instr(e, "ret 0")
@@ -1275,6 +1297,7 @@ generate :: proc(e: ^Emitter, c: ^Checker, root: ^Node(Wrapped)) -> string {
         old_out := e.out
         old_scope := e.current_scope
         old_locals := e.locals
+        old_stack_slots := e.stack_slots
         old_breaks := e.breaks
         old_conts := e.conts
         old_terminated := e.terminated
@@ -1285,6 +1308,7 @@ generate :: proc(e: ^Emitter, c: ^Checker, root: ^Node(Wrapped)) -> string {
             e.out = old_out
             e.current_scope = old_scope
             e.locals = old_locals
+            e.stack_slots = old_stack_slots
             e.breaks = old_breaks
             e.conts = old_conts
             e.terminated = old_terminated
@@ -1296,6 +1320,7 @@ generate :: proc(e: ^Emitter, c: ^Checker, root: ^Node(Wrapped)) -> string {
         assert(e.current_scope != nil)
         e.out = &e.instances
         e.locals = make(map[^Node(Wrapped)]QBE_Operand, e.allocator)
+        e.stack_slots = make(map[^Node(Wrapped)]QBE_Operand, e.allocator)
         e.breaks = make([dynamic]string, e.allocator)
         e.conts = make([dynamic]string, e.allocator)
         e.next_temp = 0
@@ -1318,7 +1343,6 @@ generate :: proc(e: ^Emitter, c: ^Checker, root: ^Node(Wrapped)) -> string {
             )
         }
         fmt.sbprintf(e.out, ") {{\n@start\n")
-        
         for param, i in instance.params {
             local := new_local(e, resolved_type(param))
             e.locals[param] = local
@@ -1328,6 +1352,7 @@ generate :: proc(e: ^Emitter, c: ^Checker, root: ^Node(Wrapped)) -> string {
             )
             emit_store(e, local, incoming)
         }
+        allocate_stack_memory(e, instance.body)
 
         result := emit(e, instance.body)
         if !e.terminated {
