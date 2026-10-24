@@ -2,29 +2,15 @@
 decl count = 1
 while count <= 100 do
     if count % 15 == 0 do
-        print("Fizz Buzz")
+        puts("Fizz Buzz")
     else if count % 5 == 0 do
-        print("Buzz")
+        puts("Buzz")
     else if count % 3 == 0 do 
-        print("Fizz")
+        puts("Fizz")
     else 
-        print_int(count)
-        print("")
+        libc_print_int(count)
+        puts("") // newline
     
     count+=1
 
-// UGLY PART!
-forward print = def(str) do
-    invoke:puts str
-    return
-
-layout _libcArgs_Printf_for_print_int align 8
-    fmt: ptr
-    n: s64 @varargs
-
-forward print_int = def(n) do
-    decl args = push _libcArgs_Printf_for_print_int
-    args.fmt = "%ld"
-    args.n = n
-    invoke:printf args
-    return
+#include "easy.magic"

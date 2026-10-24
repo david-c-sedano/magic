@@ -8,6 +8,7 @@ import "core:strconv"
 import "core:unicode/utf8"
 import "core:os"
 import "core:fmt"
+import "core:path/filepath"
 
 import vmem "core:mem/virtual"
 
@@ -676,20 +677,38 @@ group :: proc(g: ^Godlex, expect := Token_Kind.INVALID) -> Token {
         /* PREPROCESSOR */
         switch directive.text {
         case "include":
-            path := get_token(g)
-            if path.kind != .STR {
-                bad_token(g, path, "expected string after `#include`")
-                return Token { kind = .INVALID, start=hash.start, end=path.end }
+            file_name := get_token(g)
+            if file_name.kind != .STR {
+                bad_token(g, file_name, "expected string after `#include`")
+                return Token { kind = .INVALID, start=hash.start, end=file_name.end }
             }
-            data, err := os.read_entire_file(path.as_str,context.allocator)
+            contents, err := os.read_entire_file(file_name.as_str,g.allocator)
+            data: string
+            found := false
             if err != nil {
-                bad_token(g, path, "cannot `#include` file that doesn't exist")
-                return Token { kind = .INVALID, start=hash.start, end=path.end }
+                for path in g.include_paths {
+                    full_path,_ := filepath.join({path, file_name.as_str})
+                    contents, err := os.read_entire_file(full_path,g.allocator)
+                    delete(full_path)
+                    if err == nil {
+                        data = cast(string) contents
+                        found = true
+                        break
+                    }
+                }
+            } else {
+                data = cast(string) contents
+                found = true
             }
-            include := do_include(g, path.as_str, cast(string) data)
+
+            if !found {
+                bad_token(g, file_name, "cannot `#include` file because it could not be found")
+                return Token { kind = .INVALID, start=hash.start, end=file_name.end }
+            }
+            include := do_include(g, file_name.as_str, data)
             if include == nil {
-                bad_token(g, path, "while including")
-                return Token { kind = .INVALID, start=hash.start, end=path.end }
+                bad_token(g, file_name, "while including")
+                return Token { kind = .INVALID, start=hash.start, end=file_name.end }
             }
             continue
 

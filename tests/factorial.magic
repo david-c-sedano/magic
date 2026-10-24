@@ -1,7 +1,6 @@
 
-
 decl result = factorial(5)
-exit(result)
+libc_print_int(result)
 
 forward factorial = def(n)
     if n <= 1 do
@@ -9,11 +8,4 @@ forward factorial = def(n)
     else 
         return n * factorial(n - 1)
 
-// annoying
-layout _libcArgs_Exit align 8
-    status: s32
-
-forward exit = def(status) do
-    decl args = push _libcArgs_Exit
-    args.status = status
-    invoke:exit args
+#include "easy.magic"

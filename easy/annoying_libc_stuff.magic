@@ -1,0 +1,22 @@
+
+forward puts = def(str) do
+    invoke:puts str
+    return
+
+layout _libcArgs_Printf_for_print_int align 8
+    fmt: ptr
+    n: s64 @varargs
+forward libc_print_int = def(n) do
+    decl args = push _libcArgs_Printf_for_print_int
+    args.fmt = "%ld"
+    args.n = n
+    invoke:printf args
+    return
+
+// annoying
+layout _libcArgs_Exit align 8
+    status: s32
+forward libc_exit = def(status) do
+    decl args = push _libcArgs_Exit
+    args.status = status
+    invoke:exit args

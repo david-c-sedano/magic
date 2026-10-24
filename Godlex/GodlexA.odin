@@ -10,6 +10,7 @@ Godlex :: struct {
     history: [dynamic]Token,
     prev_hist_sizes: [dynamic]int,
     includes,breadcrumbs: ^Lex_File,
+    include_paths: []string,
     defines: map[string]string,
     messages: [dynamic]Message,
     error_count: int,

@@ -1,0 +1,15 @@
+
+
+InitWindow(800, 450, "raylib [magic] example - basic window")
+SetTargetFPS(60)
+
+while !WindowShouldClose() do
+    BeginDrawing()
+    ClearBackground(0xf5f5f5ff)
+    DrawText("Congrats! Magic can create it's first window!!", 190, 200, 20, 0xc8c8c8ff)
+    EndDrawing()
+
+CloseWindow()
+
+#include "raylib.magic"
+

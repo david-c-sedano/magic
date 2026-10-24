@@ -238,7 +238,7 @@ sbprint :: proc(node: ^Node(Wrapped), b: ^strings.Builder, prefix := "") {
         }
 
         if invoke.arg == nil {
-            fmt.sbprintf(b, "%└───none\n", prefix)
+            fmt.sbprintf(b, "%s└───none\n", prefix)
         } else {
             fmt.sbprintf(b, "%s%s", prefix, "└───")
             next_prefix := strings.join({prefix, "    "},"")

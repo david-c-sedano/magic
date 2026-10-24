@@ -1,0 +1,74 @@
+
+layout Color
+    r: u8
+    g: u8
+    b: u8
+    a: u8
+
+/* BOILERPLATE GOLAZO!!! */
+
+layout _rlArgs_InitWindow align 8
+    width: s32
+    height: s32
+    title: ptr
+forward InitWindow = def(width, height, title) do
+    decl args = push _rlArgs_InitWindow
+    args.width = width
+    args.height = height
+    args.title = title
+    invoke:InitWindow args
+    return
+
+layout _rlArgs_SetTargetFPS align 8
+    fps: s32
+forward SetTargetFPS = def(fps) do
+    decl args = push _rlArgs_SetTargetFPS
+    args.fps = fps
+    invoke:SetTargetFPS args
+    return
+
+forward WindowShouldClose = def() do
+    return (invoke:WindowShouldClose none as u8) as bool
+
+forward BeginDrawing = def() do
+    invoke:BeginDrawing none
+    return
+forward EndDrawing = def() do
+    invoke:EndDrawing none
+    return
+forward CloseWindow = def() do
+    invoke:CloseWindow none
+    return
+
+layout _rlArgs_ClearBackground align 4
+    color: embed Color
+forward ClearBackground = def(color) do
+    decl args = push _rlArgs_ClearBackground
+    args.color.r = (color >> 24) as byte
+    args.color.g = ((color >> 16) & 255) as byte
+    args.color.b = ((color >> 8) & 255) as byte
+    args.color.a = (color & 255) as byte
+    invoke:ClearBackground args
+    return
+
+layout _rlArgs_DrawText align 8
+    text: ptr
+    pos_x: s32
+    pos_y: s32
+    font_size: s32
+    color: embed Color
+forward DrawText = def(text, pos_x, pos_y, font_size, color) do
+    decl args = push _rlArgs_DrawText
+    args.text = text
+    args.pos_x = pos_x
+    args.pos_y = pos_y
+    args.font_size = font_size
+
+    /* COLOR IS EXPECTED TO BE INTEGER HEX VALUE */
+    args.color.r = (color >> 24) as byte
+    args.color.g = ((color >> 16) & 255) as byte
+    args.color.b = ((color >> 8) & 255) as byte
+    args.color.a = (color & 255) as byte
+
+    invoke:DrawText args
+    return 

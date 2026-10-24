@@ -1,6 +1,6 @@
 
 decl result = fibonacci(10)
-exit(result)
+libc_print_int(result)
 
 forward fibonacci = def(n)
     if n <= 1 do
@@ -8,11 +8,4 @@ forward fibonacci = def(n)
     else
         return fibonacci(n - 1) + fibonacci(n - 2)
 
-// annoying
-layout _libcArgs_Exit align 8
-    status: s32
-
-forward exit = def(status) do
-    decl args = push _libcArgs_Exit
-    args.status = status
-    invoke:exit args
+#include "easy.magic"

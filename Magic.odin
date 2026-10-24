@@ -42,8 +42,9 @@ main :: proc() {
     }
 
     Options :: struct {
-        file: ^os.File `args:"pos=0,required,file=r" usage:"Input File."`,
-        out: string `args:"pos=1,required"usage:"Output File."`
+        file: ^os.File `args:"required,file=r" usage:"Input File."`,
+        out: string `args:"required"usage:"Output File."`,
+        include_paths: [dynamic]string `usage:"Directories to look for files given to '#include'."`
     }
     opts: Options
     flags.parse_or_exit(&opts, os.args, .Odin)
@@ -56,7 +57,11 @@ main :: proc() {
     data, succ := os.read_entire_file(opts.file, context.temp_allocator)
 
     g,_ := lex.make_character_grouper(info.name, cast(string) data, context.temp_allocator)
-    defer lex.delete_character_grouper(g)
+    g.include_paths = opts.include_paths[:]
+    defer { 
+        lex.delete_character_grouper(g)
+        delete(opts.include_paths)
+    }
     root := parse_top_level(g)
     if lex.has_error(g) {
         return
@@ -98,7 +103,6 @@ main :: proc() {
     fmt.println("[MAGIC] we good, fam")
 
     e: Emitter
-
     init_emitter(&e, root, allocator=g.allocator)
     owari_da := generate(&e, &c, root)
     when ODIN_DEBUG {
