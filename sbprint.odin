@@ -116,7 +116,11 @@ sbprint :: proc(node: ^Node(Wrapped), b: ^strings.Builder, prefix := "") {
     }
     
     if list := node_cast(Arg_List, node); list != nil {
-        fmt.sbprintf(b, "param_list\n")
+        if list.ghost {
+            fmt.sbprintf(b, "arg_list w/ghost\n")
+        } else {
+            fmt.sbprintf(b, "arg_list\n")
+        }
         for node, i in list.args {
             is_last := i == len(list.args) - 1
             next_prefix: string

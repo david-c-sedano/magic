@@ -6,8 +6,8 @@ This is my custom programming language/compiler. Currently work in progress.
 Code generation is finished! The gap between a usable, polished language and I what I currently have, though, is massive! 
 
 1. start writing stdlib
-2. figure out how to return """"structs"""" (not really structs)
-3. figure out subscripting
+2. figure out subscripting
+3. make `overlay` work with `invoke`
 4. better codegen "error" messages (more like developer embarassment)
 5. write more tests/examples!
 

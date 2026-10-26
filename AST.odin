@@ -125,6 +125,7 @@ Unary_Expr :: struct {
 }
 
 Arg_List :: struct {
+    ghost: bool, // returns via param, a ghost parameter.....
     args: []^Node(Wrapped),
 }
 

@@ -4,6 +4,7 @@ package magic
 import lex "Godlex"
 import "core:fmt"
 import "core:strings"
+import "core:slice"
 
 Addressing_Mode :: enum {
     INVALID = 1,
@@ -48,8 +49,9 @@ Scope :: struct {
     symbols: map[string]^Entity,
 }
 
-Return_Stack :: struct {
-    prev: ^Return_Stack,
+Instance :: struct {
+    prev: ^Instance,
+    ghost: bool,
     template: ^Node(Function),
     instance: ^Node(Function),
     constraints: Unknown,
@@ -59,7 +61,7 @@ Return_Stack :: struct {
 Checker :: struct {
     using g: ^lex.Godlex,
     scope: ^Scope,
-    current: ^Return_Stack,
+    current: ^Instance,
     loop_depth: int,
     changed: bool,
     passes: int,
@@ -558,6 +560,11 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
             original.constraints = common
         }
 
+        if active.ghost != list.ghost {
+            warn(c, "recursive call must also be a ghost call")
+            return operand_of(call, .INVALID)
+        }
+
         // recursive call shares return type
         common := call.constraints & active.constraints
         if card(common) == 0 {
@@ -574,6 +581,7 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
         return operand_of(call, .RVALUE)
     }
 
+    needs_ghost := false
     if call.instance == nil {
         fresh := copy_node_recursively(wrap_node(lhs.template), c.allocator)
         instance := node_cast(Function, fresh)
@@ -582,6 +590,10 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
         }
         seed(c, instance.body)
         call.instance = instance
+
+        if list.ghost {
+            needs_ghost = true
+        }
     }
 
     // allocate caller scope
@@ -600,9 +612,9 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
     }
 
     call.instance.scope = callee
-    for node,i in call.instance.params {
+    for arg,i in list.args {
+        node := call.instance.params[i]
         param := node_cast(Leaf, node)
-        arg := list.args[i]
         // argument supplied by caller
         if param != nil && arg != nil {
             assert(param.token.kind == .IDENT)
@@ -667,11 +679,12 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
     }
 
     // this is an insane power move btw, epic stack in call stack
-    current: Return_Stack 
+    current: Instance 
     current.prev = c.current
     current.template = lhs.template
     current.instance = call.instance
     current.constraints = call.constraints
+    current.ghost = list.ghost
     c.current = &current
     defer c.current = current.prev
 
@@ -716,6 +729,19 @@ instantiate :: proc(c: ^Checker, call: ^Node(Bin_Expr)) -> Operand {
         c.error_count -= 1 // only 1
         c.scope = caller
         return operand_of(call, .INVALID)
+    }
+
+    // kind of like syntax sugar? not really because this is in template instantiation
+    if list.ghost && needs_ghost {
+        ghost := new_node(Leaf, alloc=c.allocator)
+        ghost.token.text = ":ghost" // illegal identifier xD
+        ghost.constraints = Ptr
+        params_w_ghost := slice.clone_to_dynamic(
+            call.instance.params, allocator=c.allocator
+        )
+        append(&params_w_ghost, wrap_node(ghost))
+        set_layout(c, ghost, call.instance.layout)
+        call.instance.params = params_w_ghost[:]
     }
 
     // reuse instance if already been generated
@@ -1668,7 +1694,7 @@ infer_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
         }
         while.cond.constraints = common
 
-        // I swear bro, the `Return_Stack` is peak coding
+        // I swear bro, the `Instance` is peak coding
         depth := &c.loop_depth
         if c.current != nil {
             depth = &c.current.loop_depth
@@ -1914,8 +1940,24 @@ finalize :: proc(c: ^Checker, root: ^Node(Wrapped)) {
                 bad_node(c, node, "expression has no valid type")
             }
         }
-    }
 
+        if call := node_cast(Bin_Expr, node); call != nil && call.kind == .CALL {
+            list := node_cast(Arg_List, call.right)
+            if list.ghost {
+                if call.constraints != Ptr || call.layout == nil {
+                    bad_node(c, call, "ghost call must return a ptr with a layout")
+                    return
+                }
+                if call.layout.align > 16 {
+                    bad_node(c, call,
+                        "ghost return layout alignment above 16 is not supported"
+                    )
+                    return
+                }
+            }
+        }
+
+    }
     root := node_cast(Block, root)
     assert(root != nil)
     // DO NOT print the entire toplevel for *every error*

@@ -5,6 +5,20 @@ layout Color
     b: u8
     a: u8
 
+layout Rectangle
+    x: f32
+    y: f32
+    width: f32
+    height: f32
+
+forward rectangle = def(x, y, width, height) do 
+    decl rec = push Rectangle
+    rec.x = x
+    rec.y = y
+    rec.width = width
+    rec.height = height
+    return rec
+
 /* BOILERPLATE GOLAZO!!! */
 
 layout _rlArgs_InitWindow align 8
@@ -44,10 +58,12 @@ layout _rlArgs_ClearBackground align 4
     color: embed Color
 forward ClearBackground = def(color) do
     decl args = push _rlArgs_ClearBackground
+    /* COLORS ARE EXPECTED TO BE INTEGER HEX VALUE */
     args.color.r = (color >> 24) as byte
     args.color.g = ((color >> 16) & 255) as byte
     args.color.b = ((color >> 8) & 255) as byte
     args.color.a = (color & 255) as byte
+
     invoke:ClearBackground args
     return
 
@@ -63,8 +79,6 @@ forward DrawText = def(text, pos_x, pos_y, font_size, color) do
     args.pos_x = pos_x
     args.pos_y = pos_y
     args.font_size = font_size
-
-    /* COLOR IS EXPECTED TO BE INTEGER HEX VALUE */
     args.color.r = (color >> 24) as byte
     args.color.g = ((color >> 16) & 255) as byte
     args.color.b = ((color >> 8) & 255) as byte
@@ -72,3 +86,20 @@ forward DrawText = def(text, pos_x, pos_y, font_size, color) do
 
     invoke:DrawText args
     return 
+
+layout _rlArgs_DrawRectangleRec align 8
+    rec: embed Rectangle
+    color: embed Color
+forward DrawRectangleRec = def(rec, color) do
+    decl args = push _rlArgs_DrawRectangleRec
+    args.rec.x = rec.x
+    args.rec.y = rec.y
+    args.rec.width = rec.width
+    args.rec.height = rec.height
+    args.color.r = (color >> 24) as byte
+    args.color.g = ((color >> 16) & 255) as byte
+    args.color.b = ((color >> 8) & 255) as byte
+    args.color.a = (color & 255) as byte
+
+    invoke:DrawRectangleRec args
+    return

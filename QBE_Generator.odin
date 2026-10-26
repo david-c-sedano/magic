@@ -23,6 +23,8 @@ Emitter :: struct {
     current_scope: ^Scope,
     locals: map[^Node(Wrapped)]QBE_Operand,
     stack_slots: map[^Node(Wrapped)]QBE_Operand,
+    ghost_slot: QBE_Operand,
+    ghost_layout: ^Layout_Info,
 
     types: strings.Builder,
     types_cache: map[^Layout_Info]string,
@@ -738,10 +740,26 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
                 args = call_args(e, bin_expr)
             }
 
+            if list.ghost {
+                slot, ok := e.stack_slots[node]
+                assert(ok, "ghost call has no stack slot?")
+
+                if len(args) == 0 {
+                    args = fmt.aprintf("l %s", slot.literal, allocator=e.allocator)
+                } else {
+                    args = fmt.aprintf("%s, l %s", args, slot.literal, allocator=e.allocator)
+                }
+                // ghost call is `void` at the QBE level
+                emit_instr(e, "call $%s(%s)", hash, args)
+                // but Magic sees a ptr with the layout
+                return slot
+            }
+
             if type_is(bin_expr, .NONE) {
                 emit_instr(e, "call $%s(%s)", hash, args)
                 return {}
             }
+
             result := new_temp(e, qbe_type(bin_expr))
             emit_instr(e, "%s =%s call $%s(%s)",
                 result.literal, qbe_type_string(result.type), hash, args
@@ -1013,16 +1031,26 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
     }
 
     if ret := node_cast(Return, node); ret != nil {
-        if ret.result != nil {
-            result := emit(e, ret.result)
-
-            if type_is(ret.result, .NONE) {
-                emit_instr(e, "ret")
-            } else {
-                emit_instr(e, "ret %s", result.literal)
-            }
-        } else {
+        if e.ghost_layout != nil {
+            assert(ret.result != nil)
+            source := emit(e, ret.result)
+            // I cannot believe I get away with this without using `ensure_qbe_type`
+            emit_instr(e, "blit %s, %s, %d",
+                source.literal, e.ghost_slot.literal, e.ghost_layout.size
+            )
             emit_instr(e, "ret")
+        } else {
+            if ret.result != nil {
+                result := emit(e, ret.result)
+
+                if type_is(ret.result, .NONE) {
+                    emit_instr(e, "ret")
+                } else {
+                    emit_instr(e, "ret %s", result.literal)
+                }
+            } else {
+                emit_instr(e, "ret")
+            }
         }
         e.terminated = true
         return {}
@@ -1233,6 +1261,21 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
     return {}
 }
 
+allocate_layout :: proc(e: ^Emitter, layout: ^Layout_Info) -> QBE_Operand {
+    assert(layout.align <= 16) // I think this is valid codegen error as well!
+    opcode := "alloc4"
+    if layout.align > 8 {
+        opcode = "alloc16"
+    } else if layout.align > 4 {
+        opcode = "alloc8"
+    }
+    slot := new_temp(e, .L)
+    emit_instr(e, "%s =l %s %d",
+        slot.literal, opcode, max(layout.size, 1)
+    )
+    return slot
+}
+
 allocate_stack_memory :: proc(e: ^Emitter, body: ^Node(Wrapped)) {
 
     visit :: proc(node: ^Node(Wrapped), data: rawptr) {
@@ -1243,15 +1286,18 @@ allocate_stack_memory :: proc(e: ^Emitter, body: ^Node(Wrapped)) {
         e := cast(^Emitter) data
 
         if push := node_cast(Push, node); push != nil {
-            slot := new_temp(e, .L) 
-            opcode := "alloc4"
-            if push.layout.align > 8 {
-                opcode = "alloc16"
-            } else if push.layout.align > 4 {
-                opcode = "alloc8"
+            e.stack_slots[node] = allocate_layout(e, push.layout)
+            return
+        }
+
+        if call := node_cast(Bin_Expr, node); call != nil && call.kind == .CALL {
+            list := node_cast(Arg_List, call.right)
+            assert(list != nil)
+            if list.ghost {
+                assert(call.layout != nil)
+                e.stack_slots[node] = allocate_layout(e, call.layout)
             }
-            emit_instr(e, "%s =l %s %d", slot.literal, opcode, max(push.layout.size, 1))
-            e.stack_slots[node] = slot
+            return
         }
 
         if decl := node_cast(Decl, node); decl != nil {
@@ -1315,6 +1361,8 @@ generate :: proc(e: ^Emitter, c: ^Checker, root: ^Node(Wrapped)) -> string {
         old_scope := e.current_scope
         old_locals := e.locals
         old_stack_slots := e.stack_slots
+        old_ghost_slot := e.ghost_slot
+        old_ghost_layout := e.ghost_layout
         old_breaks := e.breaks
         old_conts := e.conts
         old_terminated := e.terminated
@@ -1326,6 +1374,8 @@ generate :: proc(e: ^Emitter, c: ^Checker, root: ^Node(Wrapped)) -> string {
             e.current_scope = old_scope
             e.locals = old_locals
             e.stack_slots = old_stack_slots
+            e.ghost_slot = old_ghost_slot
+            e.ghost_layout = old_ghost_layout
             e.breaks = old_breaks
             e.conts = old_conts
             e.terminated = old_terminated
@@ -1338,13 +1388,31 @@ generate :: proc(e: ^Emitter, c: ^Checker, root: ^Node(Wrapped)) -> string {
         e.out = &e.instances
         e.locals = make(map[^Node(Wrapped)]QBE_Operand, e.allocator)
         e.stack_slots = make(map[^Node(Wrapped)]QBE_Operand, e.allocator)
+        e.ghost_slot = {}
+        e.ghost_layout = nil
         e.breaks = make([dynamic]string, e.allocator)
         e.conts = make([dynamic]string, e.allocator)
         e.next_temp = 0
         e.next_label = 0
         e.terminated = false
 
-        if resolved_type(instance) == .NONE {
+        ghost_call :: proc(instance: ^Node(Function)) -> bool {
+            if len(instance.params) == 0 {
+                return false
+            }
+            if  leaf := node_cast(Leaf, instance.params[len(instance.params)-1]); 
+                leaf != nil && leaf.token.text == ":ghost" {
+                return true
+            }
+            return false
+        }
+        
+        ghost := ghost_call(instance)
+        if ghost {
+            assert(instance.layout != nil)
+            e.ghost_layout = instance.layout
+        }
+        if ghost || resolved_type(instance) == .NONE {
             fmt.sbprintf(e.out, "function $%s(", hash)
         } else {
             fmt.sbprintf(e.out, "function %s $%s(", 
@@ -1365,13 +1433,27 @@ generate :: proc(e: ^Emitter, c: ^Checker, root: ^Node(Wrapped)) -> string {
             incoming.mode = .TEMP
             incoming.type = qbe_type(param)
             incoming.literal = fmt.aprintf("%%arg%d", i, allocator=e.allocator)
-            e.locals[param] = incoming
+
+            if ghost && i == len(instance.params)-1 {
+                e.ghost_slot = incoming
+            } else {
+                e.locals[param] = incoming
+            }
         }
         allocate_stack_memory(e, instance.body)
 
         result := emit(e, instance.body)
         if !e.terminated {
-            if resolved_type(instance) == .NONE {
+            // this is pure polish
+            if ghost { 
+                assert(result.literal != "")  
+                emit_instr(e, "blit %s, %s, %d",
+                    result.literal,
+                    e.ghost_slot.literal,
+                    e.ghost_layout.size
+                )
+                emit_instr(e, "ret")
+            } else if resolved_type(instance) == .NONE {
                 emit_instr(e, "ret")
             } else {
                 emit_instr(e, "ret %s", result.literal)

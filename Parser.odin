@@ -415,7 +415,7 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Node(Wrapped) {
         }
         /* POSTFIX */
         #partial switch op_token.kind {
-        case .OPEN_PAREN:
+        case .OPEN_PAREN,.COLON: // colon is for ghost calls
             if MAX_PREC < min_prec do break expr_parse
             params := parse_arg_list(g)
             if lex.has_error(g) {
@@ -525,9 +525,19 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Node(Wrapped) {
 
 parse_arg_list :: proc(g: ^lex.Godlex) -> ^Node(Arg_List) {
     span_start := len(g.history)
-    oparen := lex.group(g)
-    args := make([dynamic]^Node(Wrapped), g.allocator)
+    
+    ghost: bool
+    mayb_colon := lex.group_ahead(g,1,.COLON)
+    if mayb_colon.kind != .INVALID {
+        ghost = true
+    }
+    oparen := lex.group(g,.OPEN_PAREN)
+    if oparen.kind == .INVALID {
+        lex.bad_token(g,oparen, "expected open parentheses in call")
+        return nil
+    }
 
+    args := make([dynamic]^Node(Wrapped), g.allocator)
     for {
         next := lex.group_ahead(g,1)
         if next.kind == .CLOSE_PAREN {
@@ -556,6 +566,7 @@ parse_arg_list :: proc(g: ^lex.Godlex) -> ^Node(Arg_List) {
     }
     lex.group(g)
     list := new_node(Arg_List, alloc=g.allocator)
+    list.ghost = ghost 
     list.args = args[:]
     list.span = { span_start, len(g.history) }
     return list 
