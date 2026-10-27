@@ -21,11 +21,11 @@ Annotation :: struct {
     layout: ^Layout_Info,
     mode: Addressing_Mode,
     scope: ^Scope, 
+    layout_pending,pruned: bool,
 
     template_id: int,
     instance: ^Node(Function),
     instance_hash: Instance_Hash,
-    generic: bool,
 }
 
 AST_Kind :: enum {
@@ -75,6 +75,7 @@ AST_Kind :: enum {
         BIT_NOT,
         LOGICAL_NOT,
         ADDRESS_OF,
+        STRIDE_OF,
     UNARY_EXPR_END,
    
     DECL,

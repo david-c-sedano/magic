@@ -1,16 +1,169 @@
 
-InitWindow(800, 450, "raylib [magic] example - basic window")
+/*  TODO:
+    print score (need proper string formatting, SCREW varargs)
+    make it so you can define `KEY_LEFT` and friends in a way that is NOT source-order dependant
+
+    This is literally just meant to be an example/test. Dont need 3D rendering. Probably.
+*/
+
+#define KEY_LEFT  263
+#define KEY_RIGHT 262
+#define KEY_DOWN  264
+#define KEY_UP    265
+
+layout The_Snake
+    count: s64
+    capacity: s64
+    data: Snake_Segment
+
+layout Snake_Segment
+    position: embed Vector2
+    velocity: embed Vector2
+
+InitWindow(800, 450, "raylib [magic] example - snake")
 SetTargetFPS(60)
 
+decl snake = push The_Snake
+da_init(snake, 100,,)
+snake_reset(snake)
+
+decl head = snake_at(snake,0)
+head.velocity.x = 1.0
+head.velocity.y = 0.0
+
+// APPEL AND GROWTH
+decl apple = push Vector2
+decl tail = push Snake_Segment
+spawn_apple(snake, apple)
+
+decl accumulator = 0.0
+decl turned = false
 while !WindowShouldClose() do
+    //INPUT
+    head = snake_at(snake,0)
+    if !turned && IsKeyPressed(KEY_UP) && head.velocity.y != 1.0 do
+        head.velocity.x = 0.0
+        head.velocity.y = -1.0
+        turned = true
+    else if !turned && IsKeyPressed(KEY_DOWN) && head.velocity.y != -1.0 do
+        head.velocity.x = 0.0
+        head.velocity.y = 1.0
+        turned = true
+    else if !turned && IsKeyPressed(KEY_LEFT) && head.velocity.x != 1.0 do
+        head.velocity.x = -1.0
+        head.velocity.y = 0.0
+        turned = true
+    else if !turned && IsKeyPressed(KEY_RIGHT) && head.velocity.x != -1.0 do
+        head.velocity.x = 1.0
+        head.velocity.y = 0.0
+        turned = true
+
+    accumulator += GetFrameTime()
+    while accumulator >= 0.125 do
+        memcpy(tail,
+               snake_at(snake, snake.count-1),
+               stride_of snake.data)
+        snake_step(snake)
+        turned = false
+        decl head = snake_at(snake,0)
+        decl ate = head.position.x == apple.x && 
+                   head.position.y == apple.y
+        if ate do da_append(snake, tail)
+        head = snake_at(snake,0) // `da_append` does `realloc`
+        
+        decl dead = false
+        decl i = 1
+        while i < snake.count do
+            decl segment = snake_at(snake,i)
+            if head.position.x == segment.position.x && 
+               head.position.y == segment.position.y do
+                dead = true
+            i+=1
+
+        if dead do
+            snake_reset(snake)
+            spawn_apple(snake, apple)
+        else if ate do
+            spawn_apple(snake, apple)
+
+        accumulator -= 0.125
+
     BeginDrawing()
     ClearBackground(0xf5f5f5ff)
 
-    decl myrec = rectangle:(100.0, 100.0, 100.0, 100.0)
-    DrawRectangleRec(myrec, 0xff0000ff)
+    decl i=0
+    while i < snake.count do 
+        decl segment = snake_at(snake,i)
+        decl segment_rec = rectangle:(segment.position.x * 16.0, 
+                                      segment.position.y * 16.0, 
+                                      16.0, 
+                                      16.0)
+        DrawRectangleRec(segment_rec, 0x00ff00ff)
+        i+=1
+
+    decl apple_rec = rectangle:(apple.x * 16.0,
+                                apple.y * 16.0,
+                                16.0,
+                                16.0)
+    DrawRectangleRec(apple_rec, 0xff0000ff)
 
     EndDrawing()
 
 CloseWindow()
 
+forward snake_at = def(snake,i)
+    (snake.data + i * stride_of snake.data) as Snake_Segment
+
+forward snake_step = def(snake) do
+    decl head = snake_at(snake,0)
+    decl dx = head.velocity.x
+    decl dy = head.velocity.y
+    decl i = snake.count - 1
+    while i > 0 do
+        memcpy(snake_at(snake,i), snake_at(snake,i-1), stride_of snake.data)
+        i-=1
+
+    head.position.x += dx
+    head.position.y += dy
+    // wrap around screen
+    if head.position.x >= 50.0 do head.position.x = 0.0
+    if head.position.x <  0.0  do head.position.x = 49.0
+    if head.position.y >= 28.0 do head.position.y = 0.0
+    if head.position.y <  0.0  do head.position.y = 27.0
+
+    return
+
+forward snake_reset = def(snake) do
+    snake.count = 5
+    decl i = 0
+    while i < snake.count do
+        decl segment = snake_at(snake,i) 
+        segment.position.x = (8-i) as float
+        segment.position.y = 8.0
+        segment.velocity.x = 0.0
+        segment.velocity.y = 0.0
+        i+=1
+
+    decl head = snake_at(snake,0)
+    head.velocity.x = 1.0
+    return
+
+forward spawn_apple = def(snake, apple) do
+    decl occupied = true
+    while occupied do
+        apple.x = GetRandomValue(0, 49) as float
+        apple.y = GetRandomValue(0, 27) as float
+        occupied = false
+        decl i = 0
+        while i < snake.count do
+            decl segment = snake_at(snake,i)
+            if segment.position.x == apple.x && 
+               segment.position.y == apple.y do
+                occupied = true
+
+            i+=1
+
+    return
+
 #include "raylib.magic"
+#include "easy.magic"

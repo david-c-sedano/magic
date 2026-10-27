@@ -5,40 +5,26 @@ This is my custom programming language/compiler. Currently work in progress.
 # TODO:
 Code generation is finished! The gap between a usable, polished language and I what I currently have, though, is massive! 
 
-1. start writing stdlib
-2. figure out subscripting
-3. make `overlay` work with `invoke`
-4. better codegen "error" messages (more like developer embarassment)
-5. write more tests/examples!
+1. document
+2. start writing stdlib
+3. think about global variables (magic has no way to declare globals?)
+4. make `overlay` work with `invoke`
+5. better codegen "error" messages (more like developer embarassment)
+6. write more tests/examples!
 
-# note about `invoke`
-I need to add this to the spec. This kind of a huge feature.
+# DOCUMENTATION?
+need to rewrite the spec, `invoke` and `stride_of` are crazy features.
 
-I am going to hate myself trying to observe what my program does by shoehorning in a bunch of hacks with the tags (like `@exit` or `@puts`) so I will begin with C interop because this is the sad state of computers atm
+## what does `stride_of` do?
+It's like compile-time reflection but for cavemen. It returns the size of a layout attached to a pointer from an expression. So it's like `size_of` but `size_of` strictly takes another identifier and not an expression. 
 
-somthing like `extern` makes little sense to me because function calls in Magic are very abstract and inferential. What makes more sense is something like
 ```
-layout _rlArgs__InitWindow
-    width: s32
-    height: s32
-    title: ptr
+layout Vector2
+    x: f32
+    y: f32
 
-forward InitWindow = def(width, height, title) do 
-    decl args = push _rlArgs__InitWindow
-    args.width = width
-    args.height = height
-    args.title = title
-    invoke:InitWindow args
+decl vec = push Vector2
+stride_of vec // equal to 8
 ```
-if you want return values you'd need to supply a cast 
-```
-layout _libcArgs__Malloc
-    size: u64
 
-forward malloc = def(size) do
-    decl args = push _libcArgs__Malloc
-    args.size = size
-    return invoke:malloc args as ptr
-```
-Then I can begin development of my highly realistic, 3d rendered, open-world, MMORPG game with tactical combat to ship on PC, XBOX, and the Nintendo 64
-
+If the expression in `stride_of` wouldn't evaluate to a ptr with layout, then it's an error. You can probably use this to write generic hash tables or some sheet IDK

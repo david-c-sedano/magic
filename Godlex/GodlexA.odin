@@ -142,6 +142,7 @@ KEYWORDS := [?]string {
     "forward",
     "push",
     "size_of",
+    "stride_of",
     "do",
     "if",
     "else",

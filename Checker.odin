@@ -311,6 +311,9 @@ RULES := #partial [AST_Kind][]Type_Rule {
     .LOGICAL_NOT = {
         Unary_Type_Rule { Bool, Bool },
     },
+    .STRIDE_OF = {
+        Unary_Type_Rule { Ptr, Int },
+    }
 }
 
 init_checker :: proc(c: ^Checker, g: ^lex.Godlex, ptr_size := 8) {
@@ -1040,7 +1043,7 @@ seed :: proc(c: ^Checker, node: ^Node(Wrapped), toplevel := false) {
 
         if func := node_cast(Function, node); func != nil {
             insane_nested_visitor :: proc(node: ^Node(Wrapped), data: rawptr) {
-                node.generic = true
+                node.pruned = true
             }
             // non-instance functions are generic no matter what
             pre_order_walk(node, nil, insane_nested_visitor)
@@ -1088,7 +1091,7 @@ seed :: proc(c: ^Checker, node: ^Node(Wrapped), toplevel := false) {
                     invoke.constraints += Ptr 
                     invoke.layout = layout
                 } else {
-                    bad_node(c, invoke, "layout in `invoke` does not exist")
+                    bad_node(c, invoke, "layout returned by `invoke` does not exist")
                     invoke.mode = .INVALID
                     return
                 }
@@ -1778,6 +1781,14 @@ lvalue_check_and_assign :: proc(c: ^Checker, assign: ^Node(Bin_Expr)) -> Operand
     if rhs.mode == .INVALID {
         return operand_of(assign, .INVALID) 
     }
+   
+    // in case assign fails for errmsg
+    help_lhs := node_annotation_string(assign.left.constraints, assign.left.mode)
+    help_rhs := node_annotation_string(assign.right.constraints, assign.right.mode)
+    defer {
+        delete(help_lhs)
+        delete(help_rhs)
+    }
 
     if assign.kind == .ASSIGN {
         common := lhs.constraints & rhs.constraints & assign.constraints
@@ -1802,7 +1813,7 @@ lvalue_check_and_assign :: proc(c: ^Checker, assign: ^Node(Bin_Expr)) -> Operand
         }
     }
     if card(assign.constraints) == 0 {
-        bad_node(c, assign, "invalid types for assignment")
+        bad_node(c, assign, "invalid types for assignment `%s` and `%s`", help_lhs, help_rhs)
         return operand_of(assign, .INVALID)
     }
     // keep it simple, don't overwrite layout
@@ -1866,8 +1877,8 @@ lvalue_check_and_dereference :: proc(c: ^Checker, deref: ^Node(Bin_Expr)) -> Ope
     }
 
     if lhs.layout == nil {
-        bad_node(c, deref.left, "pointer has no layout assigned to it for dereference!")
-        return operand_of(deref, .INVALID)
+        deref.left.layout_pending = true
+        return operand_of(deref, .LVALUE)
     }
     field, ok := lhs.layout.fields[name]
     if !ok {
@@ -1886,6 +1897,7 @@ lvalue_check_and_dereference :: proc(c: ^Checker, deref: ^Node(Bin_Expr)) -> Ope
     }
     deref.constraints = common
     set_layout(c, deref, field.layout)
+    deref.left.layout_pending = false
     if field.embed || field.use {
         return operand_of(deref, .RVALUE) // weird as crap, but yes this is like addr-of
     }
@@ -1910,6 +1922,14 @@ check_node :: proc(c: ^Checker, node: ^Node(Wrapped)) -> Operand {
 finalize :: proc(c: ^Checker, root: ^Node(Wrapped)) {
     visit :: proc(node: ^Node(Wrapped), data: rawptr) {
         c := cast(^Checker) data
+        /*  Believe me, error messages with this checker get VERY overwhelming and not very useful
+            but if you only throw 1 at a time, it is workable if you understand how the checker works
+            Jai actually does this as well, it only prints 1 set of error messages at a time
+        */
+        if c.error_count > 0 {
+            return
+        }
+
         // resolve hashes of recursive calls that were set to the same instance
         if node.instance != nil && node.instance_hash == "" {
             hash,ok := get_instance_hash(c, node.instance, node.template_id)
@@ -1926,8 +1946,7 @@ finalize :: proc(c: ^Checker, root: ^Node(Wrapped)) {
         }
 
         // `INVALID`s must be handled and the program exited before `finalize`
-        // also `generic=true` means unknown is allowed, this is why annotation has `instance`
-        if node.mode == .INVALID || node.mode == .TEMPLATE || node.generic {
+        if node.mode == .INVALID || node.mode == .TEMPLATE || node.pruned {
             return
         }
         n := card(node.constraints) 
@@ -1939,6 +1958,11 @@ finalize :: proc(c: ^Checker, root: ^Node(Wrapped)) {
             } else if n == 0 {
                 bad_node(c, node, "expression has no valid type")
             }
+        }
+
+        if node.layout_pending && node.layout == nil {
+            bad_node(c, node, "ptr has no layout assigned to it for dereference!")
+            return
         }
 
         if call := node_cast(Bin_Expr, node); call != nil && call.kind == .CALL {
@@ -1955,6 +1979,14 @@ finalize :: proc(c: ^Checker, root: ^Node(Wrapped)) {
                     return
                 }
             }
+        }
+
+        if strideof := node_cast(Unary_Expr, node); strideof != nil && strideof.kind == .STRIDE_OF {
+            if strideof.operand.layout == nil {
+                bad_node(c, strideof, "`stride_of` does not have a layout attached")
+                return
+            }
+            strideof.operand.pruned = true // so that codegen wont do stack allocs
         }
 
     }

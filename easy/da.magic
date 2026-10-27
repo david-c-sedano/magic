@@ -1,0 +1,30 @@
+
+/*  TO USE THESE FUNCTIONS DECLARE SOME KIND OF
+    ```
+    layout da_example
+        count: s64
+        capacity: s64
+        data: <T>
+    ```
+    where `<T>` is some kind of layout
+*/
+
+forward da_init = def(array, initial_capacity, pattern=0) do
+    array.capacity = initial_capacity
+    array.count = 0
+    decl size = array.capacity * stride_of array.data
+    array.data = malloc(size)
+    memset(array.data, pattern, size)
+    return
+
+// TSODING be like:
+forward da_append = def(array, item) do
+    decl stride = stride_of array.data
+    if array.count+1 > array.capacity do
+        array.capacity *= 2
+        array.data = realloc(array.data, array.capacity * stride)
+
+    memcpy(array.data + array.count * stride, item, stride)
+    array.count+=1
+    return
+

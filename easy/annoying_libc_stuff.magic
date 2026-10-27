@@ -3,6 +3,54 @@ forward puts = def(str) do
     invoke:puts str
     return
 
+layout _libcArgs_Exit align 8
+    status: s32
+forward libc_exit = def(status) do
+    decl args = push _libcArgs_Exit
+    args.status = status
+    invoke:exit args
+
+layout _libcArgs_Malloc align 8
+    size: u64
+forward malloc = def(size) do
+    decl args = push _libcArgs_Malloc  
+    args.size = size
+    return invoke:malloc args,ptr
+
+layout _libcArgs_Realloc align 8
+    _ptr: ptr
+    new_size: u64
+forward realloc = def(_ptr, new_size) do
+    decl args = push _libcArgs_Realloc
+    args._ptr = _ptr
+    args.new_size = new_size
+    return invoke:realloc args,ptr
+
+layout _libcArgs_Memcpy align 8
+    dest: ptr
+    src: ptr
+    size: u64
+forward memcpy = def(dest, src, size) do
+    decl args = push _libcArgs_Memcpy
+    args.dest = dest 
+    args.src = src
+    args.size = size
+    return invoke:memcpy args,ptr
+
+layout _libcArgs_Memset align 8
+    _ptr: ptr
+    value: s32
+    num: u64
+forward memset = def(_ptr, value, num) do
+    decl args = push _libcArgs_Memset
+    args._ptr = _ptr
+    args.value = value
+    args.num = num
+    invoke:memset args
+    return
+
+// TODO: get rid of this `libc_print_int` garbage
+// i'd rather DIE than use `printf` wtf man
 layout _libcArgs_Printf_for_print_int align 8
     fmt: ptr
     n: s64 @varargs
@@ -12,11 +60,3 @@ forward libc_print_int = def(n) do
     args.n = n
     invoke:printf args
     return
-
-// annoying
-layout _libcArgs_Exit align 8
-    status: s32
-forward libc_exit = def(status) do
-    decl args = push _libcArgs_Exit
-    args.status = status
-    invoke:exit args

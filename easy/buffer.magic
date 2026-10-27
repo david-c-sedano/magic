@@ -1,8 +1,0 @@
-
-layout buffer
-    end: ptr
-    length: s64
-    data: ptr
-    capacity: s64
-
-// TODO: 

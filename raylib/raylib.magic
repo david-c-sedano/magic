@@ -1,4 +1,13 @@
 
+layout Vector2
+    x: f32
+    y: f32
+forward vector2 = def(x, y) do
+    decl vec = push Vector2
+    vec.x = x
+    vec.y = y
+    return vec
+
 layout Color
     r: u8
     g: u8
@@ -10,7 +19,6 @@ layout Rectangle
     y: f32
     width: f32
     height: f32
-
 forward rectangle = def(x, y, width, height) do 
     decl rec = push Rectangle
     rec.x = x
@@ -42,7 +50,10 @@ forward SetTargetFPS = def(fps) do
     return
 
 forward WindowShouldClose = def() do
-    return (invoke:WindowShouldClose none as u8) as bool
+    return (invoke:WindowShouldClose none,u8) as bool
+
+forward GetFrameTime = def() do
+    return invoke:GetFrameTime none,f32
 
 forward BeginDrawing = def() do
     invoke:BeginDrawing none
@@ -53,6 +64,13 @@ forward EndDrawing = def() do
 forward CloseWindow = def() do
     invoke:CloseWindow none
     return
+
+layout _rlArgs_IsKeyPressed align 8
+    key: s32
+forward IsKeyPressed = def(key) do
+    decl args = push _rlArgs_IsKeyPressed
+    args.key = key
+    return (invoke:IsKeyPressed args,u8) as bool
 
 layout _rlArgs_ClearBackground align 4
     color: embed Color
@@ -66,6 +84,15 @@ forward ClearBackground = def(color) do
 
     invoke:ClearBackground args
     return
+
+layout _rlArgs_GetRandomValue align 8
+    min: s32
+    max: s32
+forward GetRandomValue = def(min, max) do
+    decl args = push _rlArgs_GetRandomValue
+    args.min = min
+    args.max = max
+    return invoke:GetRandomValue args,s32
 
 layout _rlArgs_DrawText align 8
     text: ptr
@@ -87,6 +114,26 @@ forward DrawText = def(text, pos_x, pos_y, font_size, color) do
     invoke:DrawText args
     return 
 
+layout _rlArgs_DrawRectangle align 8
+    pos_x: s32
+    pos_y: s32
+    width: s32
+    height: s32
+    color: embed Color
+forward DrawRectangle = def(pos_x, pos_y, width, height, color) do
+    decl args = push _rlArgs_DrawRectangle
+    args.pos_x = pos_x
+    args.pos_y = pos_y
+    args.width = width
+    args.height = height
+    args.color.r = (color >> 24) as byte
+    args.color.g = ((color >> 16) & 255) as byte
+    args.color.b = ((color >> 8) & 255) as byte
+    args.color.a = (color & 255) as byte
+
+    invoke:DrawRectangle args
+    return
+
 layout _rlArgs_DrawRectangleRec align 8
     rec: embed Rectangle
     color: embed Color
@@ -103,3 +150,4 @@ forward DrawRectangleRec = def(rec, color) do
 
     invoke:DrawRectangleRec args
     return
+

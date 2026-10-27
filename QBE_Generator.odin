@@ -824,13 +824,25 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
         return operand
     }
 
-    // thank goodness there are only 4 unary exprs
+    // thank goodness there are only 5 unary exprs
     if unary_expr := node_cast(Unary_Expr, node); unary_expr != nil {
         if unary_expr.kind == .ADDRESS_OF {
             addr := emit_addr(e, unary_expr.operand)
             addr.mode = .TEMP
             addr.type = .L
             return addr
+        }
+        if unary_expr.kind == .STRIDE_OF {
+            assert(unary_expr.operand.layout != nil)
+            operand: QBE_Operand
+            operand.mode = .IMM_INT
+            operand.type = .L
+            // criminal
+            operand.literal = fmt.aprintf("%d", 
+                unary_expr.operand.layout.size,
+                allocator=e.allocator
+            )
+            return operand
         }
 
         value := emit(e, unary_expr.operand)
@@ -1279,8 +1291,7 @@ allocate_layout :: proc(e: ^Emitter, layout: ^Layout_Info) -> QBE_Operand {
 allocate_stack_memory :: proc(e: ^Emitter, body: ^Node(Wrapped)) {
 
     visit :: proc(node: ^Node(Wrapped), data: rawptr) {
-        // `generic` means it's marked under a `def` template 
-        if node.generic {
+        if node.pruned {
             return
         }
         e := cast(^Emitter) data

@@ -386,6 +386,20 @@ parse_expr :: proc(g: ^lex.Godlex, min_prec := 0) -> ^Node(Wrapped) {
                 }
                 return wrap_node(sizeof)
 
+            //bit unique
+            case "stride_of":
+                span_start := len(g.history)
+                unary_op := lex.group(g)
+                operand := parse_expr(g, MAX_PREC) 
+                if lex.has_error(g) {
+                    return nil
+                }
+                unary := new_node(Unary_Expr, .STRIDE_OF, g.allocator)
+                unary.op_token = unary_op
+                unary.operand = operand
+                unary.span = { span_start, len(g.history) }
+                return wrap_node(unary)
+
             case "invoke":
                 invoke := parse_invoke(g)
                 if lex.has_error(g) {
@@ -798,13 +812,13 @@ parse_invoke :: proc(g: ^lex.Godlex) -> ^Node(Invoke) {
         invoke.embed = true
     }
 
-    maybe_as := lex.group_ahead(g,1)
-    if maybe_as.kind == .KEYWORD && maybe_as.text == "as" {
+    maybe_comma := lex.group_ahead(g,1)
+    if maybe_comma.kind == .COMMA {
         lex.group(g)
         type_name := lex.group(g, .IDENT)
         if type_name.kind == .INVALID {
             lex.bad_token(g, type_name, 
-                "expected an identifier after `as` in `invoke` expr"
+                "expected an identifier after the `,` in `invoke` expr"
             )
             return nil
         }
