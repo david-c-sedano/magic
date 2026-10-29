@@ -1974,7 +1974,7 @@ finalize :: proc(c: ^Checker, root: ^Node(Wrapped)) {
                 }
                 if call.layout.align > 16 {
                     bad_node(c, call,
-                        "ghost return layout alignment above 16 is not supported"
+                        "ghost return value alignment above 16 is not supported"
                     )
                     return
                 }

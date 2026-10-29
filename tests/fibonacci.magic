@@ -1,4 +1,6 @@
 
+#include "easy.magic"
+
 decl result = fibonacci(10)
 libc_print_int(result)
 
@@ -8,4 +10,3 @@ forward fibonacci = def(n)
     else
         return fibonacci(n - 1) + fibonacci(n - 2)
 
-#include "easy.magic"

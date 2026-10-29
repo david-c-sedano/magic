@@ -270,24 +270,50 @@ ensure_qbe_type :: proc(e: ^Emitter, layout: ^Layout_Info) -> string {
     }
     name := fmt.aprintf(":magic_%s", layout.node.name, allocator=e.allocator)
 
-    needs_opaque :: proc(layout: ^Layout_Info) -> bool {
+    Group :: struct { first,last,offset,size,align: int }
+    groups := make([dynamic]Group, 0, len(layout.node.fields))
+    defer delete(groups)
+
+    for node,i in layout.node.fields {
+        field := node_cast(Layout_Field, node)
+        info := layout.fields[field.name]
+
+        a := min(info.size, 8)
+        if info.embed || info.use {
+            a = info.layout.align
+        }
+        assert(a > 0)
+        if !info.overlay {
+            g: Group
+            g.first = i
+            g.last = i+1
+            g.offset = info.offset
+            g.size = info.size
+            g.align = a
+            append(&groups, g)
+        } else {
+            assert(len(groups)>0, "overlay without preceding field??")
+            group := &groups[len(groups)-1]
+            group.last = i+1
+            group.size = max(group.size,info.size)
+            group.align = max(group.align,a)
+        }
+    }
+
+    needs_opaque :: proc(layout: ^Layout_Info, groups: []Group) -> bool {
         cursor := 0
         natural_align := 1
-        for ast_field in layout.node.fields {
-            field := node_cast(Layout_Field, ast_field)
-            info := layout.fields[field.name]
-            // just don't invoke with layouts using `overlay` this is TODO
-            assert(!info.overlay)
-
-            a := min(info.size, 8)
-            if info.embed || info.use {
-                a = info.layout.align
-            }
-            cursor = cursor + (a - cursor % a) % a
-            if cursor != info.offset {
+        for group in groups {
+            a := group.align
+            cursor += (a - cursor % a) % a
+            if cursor != group.offset {
                 return true
             }
-            cursor += info.size
+            size := group.size
+            if group.last - group.first > 1 {
+                size += (a - size % a) % a
+            }
+            cursor += size
             natural_align = max(natural_align, a)
         }
         a := max(natural_align, layout.align)
@@ -298,8 +324,8 @@ ensure_qbe_type :: proc(e: ^Emitter, layout: ^Layout_Info) -> string {
     // This probably doesn't take care of 100% of ABI crackpot cases
     // the fact that someone can write an incorrect `invoke` though is part of the trust model
     // as long as the tools are in place and the result makes sense, its fine
-    if needs_opaque(layout) {
-        fmt.sbprintf(&e.types, "type %s = align %d { %d }\n", 
+    if needs_opaque(layout, groups[:]) {
+        fmt.sbprintf(&e.types, "type %s = align %d {{ %d }}\n", 
             name, layout.align, layout.size
         )
         e.types_cache[layout] = name
@@ -308,35 +334,51 @@ ensure_qbe_type :: proc(e: ^Emitter, layout: ^Layout_Info) -> string {
 
     b := strings.builder_make(e.allocator)
     fmt.sbprintf(&b, "type %s = align %d {{ ", name, layout.align)
-    for ast_field, i in layout.node.fields {
-        field := node_cast(Layout_Field, ast_field)
-        info := layout.fields[field.name]
-        assert(!info.overlay)
-
-        field_type :: proc(e: ^Emitter, field: ^Field_Info) -> (string, int) {
-            if field.embed || field.use {
-                name := ensure_qbe_type(e, field.layout)
-                return name, field.layout.align 
-            }
-
-            switch field.node.type {
-            case "u8",  "s8":  return "b", 1
-            case "u16", "s16": return "h", 2
-            case "u32", "s32": return "w", 4
-            case "u64", "s64": return "l", 8
-            case "f32":        return "s", 4
-            case "f64":        return "d", 8
-            case:
-                assert(field.result == .PTR)
-                return "l", 8
-            }
-        }
-
-        type,_ := field_type(e, info)
+    for group, i in groups {
         if i > 0 {
             strings.write_string(&b, ", ")
         }
-        fmt.sbprintf(&b, "%s", type)
+
+        field_type :: proc(e: ^Emitter, field: ^Field_Info) -> string {
+            if field.embed || field.use {
+                name := ensure_qbe_type(e, field.layout)
+                return name
+            }
+
+            switch field.node.type {
+            case "u8",  "s8":  return "b"
+            case "u16", "s16": return "h"
+            case "u32", "s32": return "w"
+            case "u64", "s64": return "l"
+            case "f32":        return "s"
+            case "f64":        return "d"
+            case:
+                assert(field.result == .PTR)
+                return "l"
+            }
+        }
+
+        if group.last - group.first == 1 {
+            field := node_cast(Layout_Field, layout.node.fields[group.first])
+            info := layout.fields[field.name] 
+            strings.write_string(&b, field_type(e, info))
+        } else {
+            //TODO: I think if user actually defines a layout ending in smthn like `_overlay0` 
+            // the name will collide and QBE will fail
+            union_name := fmt.aprintf("%s_overlay%d", name,i,allocator=e.allocator)
+            u := strings.builder_make(e.allocator)
+            fmt.sbprintf(&u, "type %s = {{ ", union_name)
+            for j in group.first ..< group.last {
+                field := node_cast(Layout_Field, layout.node.fields[j])
+                info := layout.fields[field.name]
+                t := field_type(e, info)
+                fmt.sbprintf(&u, "{{ %s }} ", t)
+            }
+
+            fmt.sbprintf(&u, "}}\n")
+            strings.write_string(&e.types, strings.to_string(u))
+            strings.write_string(&b, union_name)
+        }
     }
 
     fmt.sbprintf(&b, " }}\n")
@@ -1102,7 +1144,6 @@ emit :: proc(e: ^Emitter, node: ^Node(Wrapped)) -> QBE_Operand {
                     strings.write_string(&b, ", ")
                 }
 
-                assert(!info.overlay, "TODO")
                 if info.embed || info.use {
                     nested := info.layout
                     qbe_name := ensure_qbe_type(e, nested)

@@ -6,11 +6,8 @@ This is my custom programming language/compiler. Currently work in progress.
 Code generation is finished! The gap between a usable, polished language and I what I currently have, though, is massive! 
 
 1. document
-2. start writing stdlib
-3. think about global variables (magic has no way to declare globals?)
-4. make `overlay` work with `invoke`
-5. better codegen "error" messages (more like developer embarassment)
-6. write more tests/examples!
+2. better codegen "error" messages (fault system)
+3. tester
 
 # DOCUMENTATION?
 need to rewrite the spec, `invoke` and `stride_of` are crazy features.

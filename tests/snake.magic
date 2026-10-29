@@ -1,15 +1,6 @@
 
-/*  TODO:
-    print score (need proper string formatting, SCREW varargs)
-    make it so you can define `KEY_LEFT` and friends in a way that is NOT source-order dependant
-
-    This is literally just meant to be an example/test. Dont need 3D rendering. Probably.
-*/
-
-#define KEY_LEFT  263
-#define KEY_RIGHT 262
-#define KEY_DOWN  264
-#define KEY_UP    265
+#include "raylib.magic"
+#include "easy.magic"
 
 layout The_Snake
     count: s64
@@ -31,7 +22,7 @@ decl head = snake_at(snake,0)
 head.velocity.x = 1.0
 head.velocity.y = 0.0
 
-// APPEL AND GROWTH
+// APPLE AND GROWTH
 decl apple = push Vector2
 decl tail = push Snake_Segment
 spawn_apple(snake, apple)
@@ -164,6 +155,3 @@ forward spawn_apple = def(snake, apple) do
             i+=1
 
     return
-
-#include "raylib.magic"
-#include "easy.magic"

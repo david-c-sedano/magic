@@ -1,7 +1,3 @@
-
+#include "easy.magic"
 puts("hello world")
 
-/*  NOTE: I put alot of work in this compiler's multi-pass design 
-    so make use of it by putting all the `#include`s at the very bottom of the file
-*/
-#include "easy.magic"

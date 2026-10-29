@@ -1,4 +1,6 @@
 
+#include "easy.magic"
+
 decl result = factorial(5)
 libc_print_int(result)
 
@@ -8,4 +10,3 @@ forward factorial = def(n)
     else 
         return n * factorial(n - 1)
 
-#include "easy.magic"

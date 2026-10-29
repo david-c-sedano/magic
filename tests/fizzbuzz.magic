@@ -1,4 +1,6 @@
 
+#include "easy.magic"
+
 decl count = 1
 while count <= 100 do
     if count % 15 == 0 do
@@ -13,4 +15,3 @@ while count <= 100 do
     
     count+=1
 
-#include "easy.magic"
