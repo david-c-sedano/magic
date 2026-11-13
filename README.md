@@ -3,11 +3,13 @@
 This is my custom programming language/compiler. Currently work in progress.
 
 # TODO:
-Code generation is finished! The gap between a usable, polished language and I what I currently have, though, is massive! 
+I think I'm really close to start self hosting (for fun?) 
+1. Add more rewrite rules to the Oracle
+2. Write stdlib
+3. Have normal test cases for the stdlib
+4. run the Oracle on each test case of the stdlib like 1000 times
 
-1. document
-2. better codegen "error" messages (fault system)
-3. tester
+I'm not **testing** my compiler, I'm maliciously trying to compromise it like a *hacker*.
 
 # DOCUMENTATION?
 need to rewrite the spec, `invoke` and `stride_of` are crazy features.
