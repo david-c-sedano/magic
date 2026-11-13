@@ -12,9 +12,6 @@ import "core:flags"
 import win32 "core:sys/windows"
 
 main :: proc() {
-    // GC be like:
-    defer free_all(context.temp_allocator)
-
 	when ODIN_DEBUG {
 		track: mem.Tracking_Allocator
 		mem.tracking_allocator_init(&track, context.allocator)
@@ -40,11 +37,20 @@ main :: proc() {
     when ODIN_OS == .Windows {
         win32.SetConsoleOutputCP(.UTF8)
     }
-
-    Options :: struct {
-        file: ^os.File `args:"required,file=r" usage:"Input File."`,
-        out: string `args:"required"usage:"Output File."`,
-        include_paths: [dynamic]string `usage:"Directories to look for files given to '#include'."`
+    
+    when ODIN_DEBUG {
+        Options :: struct {
+            file: ^os.File `args:"file=r" usage:"Input File."`,
+            out: string `usage:"Output File."`,
+            include_paths: [dynamic]string `usage:"Directories to look for files given to '#include'."`,
+            oracle: bool `usage:"consult the oracle on the current ***power*** of Magic...."`
+        }
+    } else {
+        Options :: struct {
+            file: ^os.File `args:"required,file=r" usage:"Input File."`,
+            out: string `args:"required"usage:"Output File."`,
+            include_paths: [dynamic]string `usage:"Directories to look for files given to '#include'."`
+        }
     }
     opts: Options
     flags.parse_or_exit(&opts, os.args, .Odin)
@@ -54,8 +60,20 @@ main :: proc() {
         fmt.println("bad file?")
         return
     }
-    data, succ := os.read_entire_file(opts.file, context.temp_allocator)
 
+    when ODIN_DEBUG {
+        if opts.oracle {
+            oracle()
+        }
+
+        if opts.file == nil || opts.out == "" {
+            fmt.println("goodbye, wizard.")
+            return
+        }
+    }
+
+    defer free_all(context.temp_allocator)
+    data, succ := os.read_entire_file(opts.file, context.temp_allocator)
     g,_ := lex.make_character_grouper(info.name, cast(string) data, context.temp_allocator)
     g.include_paths = opts.include_paths[:]
     defer { 

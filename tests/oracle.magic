@@ -1,0 +1,8 @@
+
+// to be comfubbled by *THE ORACLE*
+#include "easy.magic"
+
+do
+    decl one = 1
+    libc_print_int(one)
+    (do puts)("")
